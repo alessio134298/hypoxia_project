@@ -1,0 +1,65 @@
+```{r setup}
+library(tidyverse)
+library(DESeq2)
+
+id_symbol <- read_delim('/media/alessio/Data/genome110/ID_SYMBOL_converter.csv') |> 
+  dplyr::select(gene_id_version, symbol)
+```
+
+
+################################
+# Restart from the salmon counts, we use the new samples
+################################
+
+```{r}
+library(tximeta)
+
+Experiment_salmon <- read_csv("Salmon_New_samples_RNAseq_samplesheet.csv") %>% 
+  dplyr::mutate(files =  paste0("../RNAseq/salmon_quant/Samples/",files))
+
+# only normoxia samples
+Experiment_salmon <- Experiment_salmon %>% 
+  dplyr::filter(No_myco == T & str_detect(Condition_time, "_0"))
+
+se <- tximeta(Experiment_salmon)
+se <- summarizeToGene(se)
+
+DDS <- DESeqDataSet(se, design = ~ Condition_time)
+
+DDS <- DESeq(DDS)
+
+VST <- vst(DDS, blind = F)
+
+
+plotPCA(VST, intgroup = "Condition_time")
+
+H4KO_Vs_Cas9_norm_Up <- results(DDS, contrast = c("Condition_time", "H4KO_0", "Cas9_0")) %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "gene_id_version") %>% 
+  left_join(id_symbol, by = "gene_id_version") %>% 
+  dplyr::filter(log2FoldChange > 0.75 & padj < 0.05)
+
+H4KO_Vs_Cas9_norm_Down <- results(DDS, contrast = c("Condition_time", "H4KO_0", "Cas9_0")) %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "gene_id_version") %>% 
+  left_join(id_symbol, by = "gene_id_version") %>% 
+  dplyr::filter(log2FoldChange < -0.75 & padj < 0.05)
+```
+
+# extract the counts and save
+```{r}
+VSD <- assay(VST) |> 
+  as.data.frame() |> 
+  rownames_to_column('gene_id') |> 
+  left_join(id_symbol, join_by('gene_id' == 'gene_id_version'))
+
+VSD |> write_csv('VSD_normoxia_newsamples.csv')
+```
+
+```{r}
+H4KO_Vs_Cas9_norm_Up %>% write_csv("Upreg_normoxia_H4KO_vs_ctrl_salmon.csv")
+H4KO_Vs_Cas9_norm_Down %>% write_csv("Downreg_normoxia_H4KO_vs_ctrl_salmon.csv")
+```
+
+
+
