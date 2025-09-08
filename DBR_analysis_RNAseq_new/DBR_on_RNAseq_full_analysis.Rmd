@@ -1,16 +1,16 @@
 ```{r setup}
 library(tidyverse)
 library(DESeq2)
+library(ChIPseeker)
+library(clusterProfiler)
+
 
 id_symbol <- read_delim('/media/alessio/Data/genome110/ID_SYMBOL_converter.csv') |> 
   dplyr::select(gene_id_version, symbol)
 ```
 
 
-################################
-# Restart from the salmon counts, we use the new samples
-################################
-
+### Restart from the salmon counts, we use the new samples only normoxia
 ```{r}
 library(tximeta)
 
@@ -46,7 +46,7 @@ H4KO_Vs_Cas9_norm_Down <- results(DDS, contrast = c("Condition_time", "H4KO_0", 
   dplyr::filter(log2FoldChange < -0.75 & padj < 0.05)
 ```
 
-# extract the counts and save
+### extract the counts and save
 ```{r}
 VSD <- assay(VST) |> 
   as.data.frame() |> 
@@ -56,10 +56,108 @@ VSD <- assay(VST) |>
 VSD |> write_csv('VSD_normoxia_newsamples.csv')
 ```
 
+### save the upregulated and downregulated
 ```{r}
 H4KO_Vs_Cas9_norm_Up %>% write_csv("Upreg_normoxia_H4KO_vs_ctrl_salmon.csv")
 H4KO_Vs_Cas9_norm_Down %>% write_csv("Downreg_normoxia_H4KO_vs_ctrl_salmon.csv")
 ```
 
 
+# Load the DBR and select only those on the promoters
+```{r}
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene::TxDb.Hsapiens.UCSC.hg38.knownGene
+library(org.Hs.eg.db)
 
+H4KO_vs_Cas9_norm <- list(
+  H3K27ac_H4KO_vs_Cas9_Up = readPeakFile("../ChIPseq/DiffBind_bed_files/entires/H3K27ac_Up_H4KO_vs_Cas9_Normoxia_DiffBind_enriched_peaks.bed"),
+  H2BK120ac_H4KO_vs_Cas9_Up = readPeakFile("../ChIPseq/DiffBind_bed_files/entires/H2BK120ac_Up_H4KO_vs_Cas9_Normoxia_DiffBind_enriched_peaks.bed"),
+  H3K27ac_H4KO_vs_Cas9_Down = readPeakFile("../ChIPseq/DiffBind_bed_files/entires/H3K27ac_Down_H4KO_vs_Cas9_Normoxia_DiffBind_enriched_peaks.bed"),
+  H2BK120ac_H4KO_vs_Cas9_Down = readPeakFile("../ChIPseq/DiffBind_bed_files/entires/H2BK120ac_Down_H4KO_vs_Cas9_Normoxia_DiffBind_enriched_peaks.bed")
+)
+
+H4KO_vs_Cas9_norm_anno_promoter <- lapply(H4KO_vs_Cas9_norm, function(peaks) {
+  Anno <- annotatePeak(peaks, tssRegion = c(-3000,3000), TxDb = txdb, annoDb = "org.Hs.eg.db", level = "transcript") %>% 
+    as.data.frame() %>% 
+    dplyr::filter(str_detect(annotation, "Promoter")) 
+    return(Anno)
+})
+```
+
+
+# Gene ontology enrichment
+```{r}
+GO_H4KO_vs_Cas9_norm_anno_promoter <- lapply(H4KO_vs_Cas9_norm_anno_promoter , function(df) {
+  GO <- enrichGO(gene = df$SYMBOL, keyType = "SYMBOL", OrgDb = "org.Hs.eg.db", ont = "ALL")
+  return(GO)
+})
+
+GO_Plot_list <- list()
+
+for (name in names(GO_H4KO_vs_Cas9_norm_anno_promoter)) {
+  plot <- dotplot(GO_H4KO_vs_Cas9_norm_anno_promoter[[name]], title = str_c(name,"\nGO Promoter (ALL)"))
+  print(plot)
+  ggsave(plot, filename=str_c("GO_Promoter_all_",name,".png"), height = 8, width = 8)
+}
+
+```
+
+# Save excel to send Prof
+```{r}
+for (i in names(H4KO_vs_Cas9_norm_anno_promoter)) {
+  openxlsx::write.xlsx(H4KO_vs_Cas9_norm_anno_promoter[[i]] %>% dplyr::select(seqnames, start, end, annotation, SYMBOL), file = paste0(i,".xlsx"))
+}
+
+```
+
+
+# RNAseq file HDAC4 KO vs Cas9 Normoxia
+# Comparison Degs RNAseq with Genes of DBRs in ChIPseq, DBR Genes linked with HiC, SEs genes linked with HiC
+
+# Load DESeq2 Upreg
+```{r}
+Genes_UP_H4KO_vs_Cas9_norm <- read_csv("Upreg_normoxia_H4KO_vs_ctrl_salmon.csv")
+Genes_UP_H4KO_vs_Cas9_norm <- na.omit(Genes_UP_H4KO_vs_Cas9_norm$symbol)
+
+
+Genes_DOWN_H4KO_vs_Cas9_norm <- read_csv("Downreg_normoxia_H4KO_vs_ctrl_salmon.csv")
+Genes_DOWN_H4KO_vs_Cas9_norm <- na.omit(Genes_DOWN_H4KO_vs_Cas9_norm$symbol)
+```
+
+# DBRs genes
+```{r}
+Genes_DBR_H3K27ac_onPromoter <- H4KO_vs_Cas9_norm_anno_promoter$H3K27ac_H4KO_vs_Cas9_Up$SYMBOL %>% na.omit()
+
+Genes_DBR_H2BK120ac_onPromoter <- H4KO_vs_Cas9_norm_anno_promoter$H2BK120ac_H4KO_vs_Cas9_Up$SYMBOL %>% na.omit()
+
+sum(Genes_UP_H4KO_vs_Cas9_norm %in% Genes_DBR_H3K27ac_onPromoter)
+sum(Genes_UP_H4KO_vs_Cas9_norm %in% Genes_DBR_H2BK120ac_onPromoter)
+
+X <- VennDiagram::venn.diagram(x = list(Genes_UP_H4KO_vs_Cas9_norm,
+                                   Genes_DBR_H3K27ac_onPromoter,
+                                   Genes_DBR_H2BK120ac_onPromoter),
+                          filename = NULL, output = T,
+                          disable.logging = T,
+                          category.names = c("Genes Up",
+                                             "H3K27ac Genes Up Promoter",
+                                             "H2BK120ac Genes Up Promoter"),
+                          margin = 0.1)
+grid::grid.newpage()
+grid::grid.draw(X)
+
+
+
+# Also Down
+H3K27ac_Genes_DOWN_H4KO_vs_Cas9_norm_only_promoter <- H4KO_vs_Cas9_norm_anno_promoter$H3K27ac_H4KO_vs_Cas9_Down$SYMBOL %>% na.omit()
+H2BK120ac_Genes_DOWN_H4KO_vs_Cas9_norm_only_promoter <- H4KO_vs_Cas9_norm_anno_promoter$H2BK120ac_H4KO_vs_Cas9_Down$SYMBOL %>% na.omit()
+
+sum(Genes_DOWN_H4KO_vs_Cas9_norm %in% H3K27ac_Genes_DOWN_H4KO_vs_Cas9_norm_only_promoter )
+sum(Genes_DOWN_H4KO_vs_Cas9_norm %in% H2BK120ac_Genes_DOWN_H4KO_vs_Cas9_norm_only_promoter)
+
+# VennDiagram::venn.diagram(x = list(Genes_DOWN_H4KO_vs_Cas9_norm,
+#                                    H3K27ac_Genes_DOWN_H4KO_vs_Cas9_norm_only_promoter,
+#                                    H2BK120ac_Genes_DOWN_H4KO_vs_Cas9_norm_only_promoter),
+#                           filename = "DOWN_Common_Genes_H3_H2_RNAseq.png",
+#                           disable.logging = T,
+#                           category.names = c("Genes Down", "H3K27ac Genes Down", "H2BK120ac Genes Down"),
+#                           margin = 0.1)
+```
