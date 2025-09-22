@@ -1,0 +1,548 @@
+```{r setup}
+library(Gviz)
+library(rtracklayer)
+library(GenomicFeatures)
+library(org.Hs.eg.db)
+library(GO.db)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(tidyverse)
+```
+
+#loading dei file BigWig (i bamCoverage)
+```{r}
+#H3K27ac
+path.H3K27ac = "/media/alessio/Data/hypoxia/ChIPseq/samples/H3K27AC"
+dirs.H3K27ac <- list.dirs(path.H3K27ac, recursive = F, full.names = F)
+file.end <- ".bamCoverageRPKM.bw"
+
+H3K27ac.Normoxia.Datatracks <- list()
+
+options(ucscChromosomeNames=FALSE) 
+
+for (i in dirs.H3K27ac) {
+  tmp.path = file.path(path.H3K27ac,i,paste0(i,file.end))
+  print(tmp.path)
+  BW <- import.bw(tmp.path, as = "GRanges")
+  DATATRACK = DataTrack(BW,
+                        name = i,
+                        type= "histogram",
+                        fill.histogram = "#32004F" ,
+                        col.histogram = "#32004F" ,
+                        ylim = c(0,70))
+  H3K27ac.Normoxia.Datatracks[[i]] <- DATATRACK
+  rm(BW, DATATRACK)
+}
+
+
+path.H2BK120ac = "/media/alessio/Data/hypoxia/ChIPseq/samples/H2BK120AC"
+dirs.H2BK120ac = list.dirs(path.H2BK120ac, recursive = F, full.names = F)
+file.end <- ".bamCoverageRPKM.bw"
+
+H2BK120ac.Normoxia.Datatracks <- list()
+
+options(ucscChromosomeNames=FALSE) 
+
+for (i in dirs.H2BK120ac) {
+  tmp.path = file.path(path.H2BK120ac,i,paste0(i,file.end))
+  print(tmp.path)
+  BW <- import.bw(tmp.path, as = "GRanges")
+  DATATRACK = DataTrack(BW,
+                        name = i,
+                        type= "histogram",
+                        fill.histogram = "#69B437" ,
+                        col.histogram = "#69B437" ,
+                        ylim = c(0,70))
+  H2BK120ac.Normoxia.Datatracks[[i]] <- DATATRACK
+  rm(BW, DATATRACK)
+}
+
+ATAC_SKUT1_bw <- import.bw("/media/alessio/Data/leio_atac_data/bw/SRR22375896_RPKM.bw", as = "GRanges") %>% 
+  DataTrack(., name = "ATAC",
+            type= "histogram",
+            fill.histogram = "#a2063f",
+            col.histogram = "#a2063f")
+```
+
+#Elementi accessori della track (locus e geni presenti)
+```{r}
+gtrack <- GenomeAxisTrack(col = "black")
+
+#####va fatto così!!!
+txdb38 <- TxDb.Hsapiens.UCSC.hg38.knownGene
+
+genes38 <- GeneRegionTrack(txdb38, geneSymbol = TRUE,  transcriptAnnotation = "gene", name = "Genes", fill = "#1313b9", col = "black", stacking='dense')
+z <- ranges(genes38)
+print(head(z))
+z$gene <- mapIds(org.Hs.eg.db, z$gene, "SYMBOL", "ENTREZID")
+
+ranges(genes38) <- z
+#####
+plotTracks(list(genes38, gtrack), chromosome = "chr20", from = 37301941, to = 37756308)
+```
+
+
+
+#.##############################
+#Intersezioni H3K27ac H2BK120ac
+#.##############################
+
+#creo una cartella per salvare i plot sulle intersezioni di H3K27ac e H2BK120ac
+```{r}
+#dir.create("/media/alessio/Data/hypoxia/ChIPseq/plot/intersectionsH3K27ac_H2BK120tracks")
+```
+
+#leggo i bed
+```{r}
+bed.intersections.files <- list.files("/media/alessio/Data/hypoxia/ChIPseq/IDR/intersections_H3K27acxH2BK120", recursive = F, include.dirs = F, pattern = ".bed", full.names = T)
+
+bed.intersections.dataframes <- list()
+
+for (i in bed.intersections.files) {
+  name = basename(i)
+  df <- read.delim(i, header = F) %>% 
+    dplyr::rename("CHROM" = "V1", "START" = "V2", "END" = "V3") %>% 
+    dplyr::mutate(LOCUS = str_c(CHROM,":",START,"-",END),
+                  WIDTH = abs(START - END),
+                  Sample = name) %>% 
+    dplyr::filter(nchar(CHROM) < 6) %>% #per eliminare i cromosomi che non ci interessano
+    dplyr::arrange(desc(WIDTH)) %>% 
+    dplyr::select(LOCUS, CHROM, START, END, WIDTH, Sample)
+  bed.intersections.dataframes[[name]] <- df
+}
+```
+
+
+#Funzione per plottare (intersections)
+```{r}
+#funzione che itrererò su ogni riga del dataframe
+plot.and.save.track <- function(Cas9_or_H4KO, Sample, locus, from, to, chr) {
+  
+  #seleziono a seconda dell'argomento le tracks di H4KO o Cas9
+  if (Cas9_or_H4KO == "Cas9") {
+    Datatrack.H3K27ac <- H3K27ac.Normoxia.Datatracks[c(1,4)]
+    Datatrack.H2BK120ac <- H2BK120ac.Normoxia.Datatracks[c(1,4)]
+  } else if (Cas9_or_H4KO == "H4KO") {
+    Datatrack.H3K27ac <- H3K27ac.Normoxia.Datatracks[c(7,10)]
+    Datatrack.H2BK120ac <- H2BK120ac.Normoxia.Datatracks[c(7,10)]
+  } 
+  
+  #creo una highlighttrack per far vedere il picco
+  Highlight_peak <- HighlightTrack(genes38,
+                                   start = from+60000,
+                                   end = to-60000,
+                                  chromosome = chr)
+  
+  pdf(paste0("/media/alessio/Data/hypoxia/ChIPseq/plot/intersectionsH3K27ac_H2BK120tracks/",Sample,"_",locus,".pdf"), height = 15, width = 40)
+  
+  track <- plotTracks(c(Datatrack.H3K27ac,
+                        Datatrack.H2BK120ac,
+                        ATAC_SKUT1_bw,
+                        gtrack,
+                        Highlight_peak
+  ),
+  sizes = c(1,1,1,1,1,0.4,0.3),
+  from = from,
+  to = to,
+  chromosome = chr,
+  transcriptAnnotation = "gene",
+  showSampleNames = T,
+  col.sampleNames = "black",
+  col.main = "black",
+  background.title = "white",
+  col.title = "black",
+  col.axis = "black",
+  title.width = 2,
+  rotation.title = 0,
+  position.title = "right",
+  labelPos="revAlternating",
+  margin = 200,
+  cex.axis = 1.5,
+  separator = 3000,
+  cex = 1.7,
+  cex.title= 2
+  ) 
+  
+  dev.off()
+}
+```
+
+#Plot (H3K27ac e H2BK120ac exclusive, per Cas9 e H4KO)
+```{r}
+# #prendo i picchi più larghi
+# apply(bed.intersections.dataframes$Cas9.ExclusivePeaks.H3K27ac.bed[1:15,],
+#       MARGIN = 1,
+#       function(row) {
+#         plot.and.save.track("Cas9", "Cas9.ExclusivePeaks.H3K27ac", row["LOCUS"], as.numeric(row["START"])-30000, as.numeric(row["END"])+30000, row["CHROM"])
+#       })
+# 
+# apply(bed.intersections.dataframes$Cas9.ExclusivePeaks.H2BK120ac.bed[1:15,],
+#       MARGIN = 1,
+#       function(row) {
+#         plot.and.save.track("Cas9", "Cas9.ExclusivePeaks.H2BK120ac", row["LOCUS"], as.numeric(row["START"])-30000, as.numeric(row["END"])+30000, row["CHROM"])
+#       })
+# 
+# apply(bed.intersections.dataframes$H4KO.ExclusivePeaks.H3K27ac.bed[1:15,],
+#       MARGIN = 1,
+#       function(row) {
+#         plot.and.save.track("H4KO", "H4KO.ExclusivePeaks.H3K27ac", row["LOCUS"], as.numeric(row["START"])-30000, as.numeric(row["END"])+30000, row["CHROM"])
+#       })
+# 
+# apply(bed.intersections.dataframes$H4KO.ExclusivePeaks.H2BK120ac.bed[1:15,],
+#       MARGIN = 1,
+#       function(row) {
+#         plot.and.save.track("H4KO", "H4KO.ExclusivePeaks.H2BK120ac", row["LOCUS"], as.numeric(row["START"])-30000, as.numeric(row["END"])+30000, row["CHROM"])
+#       })
+# 
+# 
+# 
+# #prendo i picchi più stretti
+# apply(bed.intersections.dataframes$Cas9.ExclusivePeaks.H3K27ac.bed[(nrow(bed.intersections.dataframes$Cas9.ExclusivePeaks.H3K27ac.bed)-15):nrow(bed.intersections.dataframes$Cas9.ExclusivePeaks.H3K27ac.bed),],
+#       MARGIN = 1,
+#       function(row) {
+#         plot.and.save.track("Cas9", "Cas9.ExclusivePeaks.H3K27ac", row["LOCUS"], as.numeric(row["START"])-30000, as.numeric(row["END"])+30000, row["CHROM"])
+#       })
+# 
+
+# apply(bed.intersections.dataframes$Cas9.ExclusivePeaks.H2BK120ac.bed[(nrow(bed.intersections.dataframes$Cas9.ExclusivePeaks.H2BK120ac.bed)-15):nrow(bed.intersections.dataframes$Cas9.ExclusivePeaks.H2BK120ac.bed),],
+#       MARGIN = 1,
+#       function(row) {
+#         plot.and.save.track("Cas9", "Cas9.ExclusivePeaks.H2BK120ac", row["LOCUS"], as.numeric(row["START"])-30000, as.numeric(row["END"])+30000, row["CHROM"])
+#       })
+# 
+# apply(bed.intersections.dataframes$H4KO.ExclusivePeaks.H3K27ac.bed[(nrow(bed.intersections.dataframes$H4KO.ExclusivePeaks.H3K27ac.bed)-15):nrow(bed.intersections.dataframes$H4KO.ExclusivePeaks.H3K27ac.bed),],
+#       MARGIN = 1,
+#       function(row) {
+#         plot.and.save.track("H4KO", "H4KO.ExclusivePeaks.H3K27ac", row["LOCUS"], as.numeric(row["START"])-30000, as.numeric(row["END"])+30000, row["CHROM"])
+#       })
+# 
+# apply(bed.intersections.dataframes$H4KO.ExclusivePeaks.H2BK120ac.bed[(nrow(bed.intersections.dataframes$H4KO.ExclusivePeaks.H2BK120ac.bed)-15):nrow(bed.intersections.dataframes$H4KO.ExclusivePeaks.H2BK120ac.bed),],
+#       MARGIN = 1,
+#       function(row) {
+#         plot.and.save.track("H4KO", "H4KO.ExclusivePeaks.H2BK120ac", row["LOCUS"], as.numeric(row["START"])-30000, as.numeric(row["END"])+30000, row["CHROM"])
+#       })
+
+# #prendo delle righe a caso
+# apply(bed.intersections.dataframes$Cas9.ExclusivePeaks.H3K27ac.bed[sample(1:nrow(bed.intersections.dataframes$Cas9.ExclusivePeaks.H3K27ac.bed), 15, replace = F),],
+#       MARGIN = 1,
+#       function(row) {
+#         plot.and.save.track("Cas9", "Cas9.ExclusivePeaks.H3K27ac", row["LOCUS"], as.numeric(row["START"])-30000, as.numeric(row["END"])+30000, row["CHROM"])
+#       })
+
+apply(bed.intersections.dataframes$Cas9.ExclusivePeaks.H2BK120ac.bed[sample(1:nrow(bed.intersections.dataframes$Cas9.ExclusivePeaks.H2BK120ac.bed), 15, replace = F),],
+      MARGIN = 1,
+      function(row) {
+        plot.and.save.track("Cas9", "Cas9.ExclusivePeaks.H2BK120ac", row["LOCUS"], as.numeric(row["START"])-30000, as.numeric(row["END"])+30000, row["CHROM"])
+      })
+
+# apply(bed.intersections.dataframes$H4KO.ExclusivePeaks.H3K27ac.bed[sample(1:nrow(bed.intersections.dataframes$H4KO.ExclusivePeaks.H3K27ac.bed), 15, replace = F),],
+#       MARGIN = 1,
+#       function(row) {
+#         plot.and.save.track("H4KO", "H4KO.ExclusivePeaks.H3K27ac", row["LOCUS"], as.numeric(row["START"])-30000, as.numeric(row["END"])+30000, row["CHROM"])
+#       })
+
+apply(bed.intersections.dataframes$H4KO.ExclusivePeaks.H2BK120ac.bed[sample(1:nrow(bed.intersections.dataframes$H4KO.ExclusivePeaks.H2BK120ac.bed), 15, replace = F),],
+      MARGIN = 1,
+      function(row) {
+        plot.and.save.track("H4KO", "H4KO.ExclusivePeaks.H2BK120ac", row["LOCUS"], as.numeric(row["START"])-30000, as.numeric(row["END"])+30000, row["CHROM"])
+      })
+
+# #anche i comuni
+# apply(bed.intersections.dataframes$Cas9.CommonPeaks.btmerged.bed[sample(1:nrow(bed.intersections.dataframes$Cas9.CommonPeaks.btmerged.bed), 15, replace = F),],
+#       MARGIN = 1,
+#       function(row) {
+#         plot.and.save.track("Cas9", "Cas9.CommonPeaks.btmerged.bed", row["LOCUS"], as.numeric(row["START"])-30000, as.numeric(row["END"])+30000, row["CHROM"])
+#       })
+# 
+# apply(bed.intersections.dataframes$H4KO.CommonPeaks.btmerged.bed[sample(1:nrow(bed.intersections.dataframes$H4KO.CommonPeaks.btmerged.bed), 15, replace = F),],
+#       MARGIN = 1,
+#       function(row) {
+#         plot.and.save.track("H4KO", "H4KO.CommonPeaks.btmerged.bed", row["LOCUS"], as.numeric(row["START"])-30000, as.numeric(row["END"])+30000, row["CHROM"])
+#       })
+
+```
+
+#Tracks TEs con segnale di ATAC (per grant del prof)
+```{r}
+TEs_Cas9_H0_common_H3_H2 <- read_delim("TEs_commons_H3_H2_Cas9_0H.bed", col_names = F) |> 
+  dplyr::rename("CHROM" = "X1", "START" = "X2", "END" = "X3") |> 
+  dplyr::mutate(LOCUS = str_c(CHROM,":",START,"-",END)) 
+
+apply(TEs_Cas9_H0_common_H3_H2[sample(1:nrow(TEs_Cas9_H0_common_H3_H2), 15, replace = F),],
+      MARGIN = 1,
+      function(row) {
+        plot.and.save.track("Cas9", "TEs_Cas9_H0_common_H3_H2", row["LOCUS"], as.numeric(row["START"])-60000, as.numeric(row["END"])+60000, row["CHROM"])
+      })
+
+#Locus bello da far vedere
+# chr7:32898913-32908275
+
+plot.and.save.track("Cas9", "TEs_Cas9_H0_common_H3_H2", "chr7:32898913-32908275", 32898913-60000, 32908275+60000, "chr7")
+
+```
+
+#tracks Bigwigaverage
+```{r}
+pathBigWigAverage <- "/media/alessio/Data/hypoxia/ChIPseq/BigWigAverage" 
+filesBigWigAverage <- c("H3K27ac/bamCoverage/CAS9_normoxia_H3K27ac.bw",
+                         "H3K27ac/bamCoverage/H4KO_normoxia_H3K27ac.bw",
+                        "H2BK120ac/bamCoverage/CAS9_normoxia_H2BK120ac.bw",
+                         "H2BK120ac/bamCoverage/H4KO_normoxia_H2BK120ac.bw")
+
+names <- c("Cas9_H3K27ac",
+           "H4KO_H3K27ac",
+           "Cas9_H2BK120ac",
+           "H4KO_H2BK120ac")                      
+
+BigWigAverage.Normoxia.Datatracks <- list()
+
+options(ucscChromosomeNames=FALSE) 
+
+colors <- c("#32004F", "#32004F", "#69B437","#69B437")
+for (i in seq_along(filesBigWigAverage)) {
+  namezz <- names[i]
+  
+  tmp.path = file.path(pathBigWigAverage,filesBigWigAverage[i])
+  print(tmp.path)
+  BW <- import.bw(tmp.path, as = "GRanges")
+  DATATRACK = DataTrack(BW,
+                        name = namezz,
+                        type= "histogram",
+                        fill.histogram = colors[i] ,
+                        col.histogram = colors[i] ,
+                        ylim = c(0,70)) #settato a 30 per le tracks di intersection , a 70 per i SEs
+  BigWigAverage.Normoxia.Datatracks[[namezz]] <- DATATRACK
+  rm(BW, DATATRACK)
+}
+
+ATAC_SKUT1_bw <- import.bw("/media/alessio/Data/leio_atac_data/bw/SRR22375896_RPKM.bw", as = "GRanges") %>%
+  DataTrack(., name = "ATAC",
+            type= "histogram",
+            fill.histogram = "black",
+            col.histogram = "black")
+```
+
+#carico i bed con le intersezioni fra atac e esclusivi H3K27ac e H2BK120ac
+```{r}
+path.atac.intersect = "/media/alessio/Data/leio_atac_data/intersect_peaks/"
+files.atac.intersect = list.files(path.atac.intersect, pattern = "Exclusive")
+
+bed.intersections.atac.dataframes <- list()
+
+for (i in files.atac.intersect) {
+  df <- read.delim(str_c(path.atac.intersect,i), header = F) %>% 
+    dplyr::rename("CHROM" = "V1", "START" = "V2", "END" = "V3") %>% 
+    dplyr::mutate(LOCUS = str_c(CHROM,":",START,"-",END),
+                  WIDTH = abs(START - END),
+                  Sample = i) %>% 
+    dplyr::filter(nchar(CHROM) < 6) %>% #per eliminare i cromosomi che non ci interessano
+    dplyr::arrange(desc(WIDTH)) %>% 
+    dplyr::select(LOCUS, CHROM, START, END, WIDTH, Sample)
+  bed.intersections.atac.dataframes[[i]] <- df
+}
+```
+
+
+#Funzione per plottare (intersections) sui bigwigaverage
+```{r}
+#funzione che itrererò su ogni riga del dataframe
+plot.and.save.track.Bw.avg <- function(Sample, locus, from, to, chr) {
+  
+  
+  #creo una highlighttrack per far vedere il picco
+  Highlight_peak <- HighlightTrack(genes38,
+                                   start = from+30000,
+                                   end = to-30000,
+                                   chromosome = chr)
+  
+  pdf(paste0("/media/alessio/Data/hypoxia/ChIPseq/plot/intersectionsH3K27ac_H2BK120tracks/BigWigAvg_",Sample,"_",locus,".pdf"), height = 12, width = 30)
+  
+  track <- plotTracks(c(BigWigAverage.Normoxia.Datatracks,
+                        ATAC_SKUT1_bw,
+                        Highlight_peak
+  ),
+  from = from,
+  to = to,
+  chromosome = chr,
+  transcriptAnnotation = "gene",
+  showSampleNames = T,
+  col.sampleNames = "black",
+  col.main = "black",
+  background.title = "white",
+  col.title = "black",
+  col.axis = "black",
+  title.width = 2,
+  rotation.title = 0,
+  position.title = "right",
+  labelPos="revAlternating",
+  margin = 200,
+  cex.axis = 0.5,
+  separator = 30,
+  cex.sampleNames = 0.6
+  ) 
+  
+  dev.off()
+}
+```
+
+```{r}
+apply(bed.intersections.atac.dataframes$SKUT_atac_consensus_peaks_on_Cas9.ExclusivePeaks.H3K27ac.bed[1:15,],
+      MARGIN = 1,
+      function(row) {
+        plot.and.save.track.Bw.avg("SKUT_atac_consensus_peaks_on_Cas9.ExclusivePeaks.H3K27ac", row["LOCUS"], as.numeric(row["START"])-30000, as.numeric(row["END"])+30000, row["CHROM"])
+      })
+
+apply(bed.intersections.atac.dataframes$SKUT_atac_consensus_peaks_on_H4KO.Exclusive.vs.all.bed[sample(1:nrow(bed.intersections.atac.dataframes$SKUT_atac_consensus_peaks_on_H4KO.Exclusive.vs.all.bed), 2, replace = F),],
+      MARGIN = 1,
+      function(row) {
+        plot.and.save.track.Bw.avg("SKUT_atac_consensus_peaks_on_H4KO.Exclusive.cs.all", row["LOCUS"], as.numeric(row["START"])-30000, as.numeric(row["END"])+30000, row["CHROM"])
+      })
+
+#plot.and.save.track.Bw.avg("SKUT_atac_consensus_peaks_on_H4KO.Exclusive.cs.all", "chr14:39431382-39433369", 39431382-30000, 39433369+30000, "chr14") 
+
+
+```
+
+
+#.#####################################################################################
+#Tracks SEs Up e downregolati in comune fra i due histone markers e con picchi di HDAC4
+#.#####################################################################################
+
+#carico i picchi di HDAC4
+#carico il Bigwig di HDAC4
+#creo la track di Gviz su HDAC4
+```{r}
+library(ChIPseeker)
+HDAC4_peaks <- readPeakFile("/media/alessio/Data/NAR2020_Cb/GSM3882325_HDAC4_DMSO_SKUT_peaks.narrowPeak")
+
+HDAC4_track <- AnnotationTrack(range = HDAC4_peaks,
+                                 genome = "hg38",
+                                 fill = "darkblue",
+                                 col = "darkblue",
+                                 name = "HDAC4_peaks")
+
+HDAC4_bigwig <- import.bw("/media/alessio/Data/NAR2020_Cb/SK1_trimmed-25_markdup_RPKM.bw") %>% 
+  DataTrack(., name = "HDAC4_bw",
+              type= "histogram",
+            fill.histogram = "darkblue",
+            col.histogram = "darkblue",
+            ylim = c(0,150)
+            )
+```
+
+#carico un bed con i SEs differenziali da usare come regioni per fare le tracks
+#considerando che da ciò che abbiamo visto gli Up di H3k27ac sono in comune con quelli di H2BK120ac posso usare solo il file di H3K27ac
+```{r}
+#list.files("DiffBind_bed_files/Superenhancers/")
+
+SEs.UP.bed <- read.delim("DiffBind_bed_files/Superenhancers/SEs_H3K27ac_H4KO_vs_Cas9_Normoxia_DiffBind_enriched_peaks.bed", header = F) %>% 
+  dplyr::arrange(desc(V5)) %>% 
+  dplyr::rename("CHROM" = V1, "START" = V2, "END" = V3) %>% 
+  dplyr::mutate(LOCUS = str_c(CHROM,":",START,"-",END))
+
+SEs.DOWN.bed <- read.delim("DiffBind_bed_files/Superenhancers/SEs_H3K27ac_Cas9_vs_H4KO_Normoxia_DiffBind_enriched_peaks.bed", header = F) %>% 
+  dplyr::arrange(V5) %>% 
+  dplyr::rename("CHROM" = V1, "START" = V2, "END" = V3) %>% 
+  dplyr::mutate(LOCUS = str_c(CHROM,":",START,"-",END))
+```
+
+
+#funzione per plottare (modifico quella precedente)
+```{r}
+plot.and.save.track.Bw.avg <- function(Sample, locus, from, to, chr) {
+  
+  #creo una highlighttrack per far vedere il picco
+  Highlight_peak <- HighlightTrack(genes38,
+                                   start = from+30000,
+                                   end = to-30000,
+                                   chromosome = chr)
+  
+  pdf(paste0("/media/alessio/Data/hypoxia/ChIPseq/Figure_paper/Tracks_SEs_HDAC4/",Sample,"_",locus,".pdf"), height = 12, width = 30)
+  
+  track <- plotTracks(c(BigWigAverage.Normoxia.Datatracks,
+                        HDAC4_bigwig,
+                        Highlight_peak
+  ),
+  sizes = c(1,1,1,1,1,0.3),
+  from = from,
+  to = to,
+  chromosome = chr,
+  transcriptAnnotation = "gene",
+  showSampleNames = T,
+  col.sampleNames = "black",
+  col.main = "black",
+  background.title = "white",
+  col.title = "black",
+  col.axis = "black",
+  title.width = 2,
+  rotation.title = 0,
+  position.title = "right",
+  labelPos="revAlternating",
+  margin = 200,
+  cex.axis = 1,
+  separator = 0,
+  cex.title = 1
+  ) 
+  
+  dev.off()
+}
+```
+
+
+```{r}
+apply(SEs.UP.bed[c(1:15),],
+      MARGIN = 1,
+      function(row) {
+      plot.and.save.track.Bw.avg("SEs.UP.HDAC4peaks", row["LOCUS"], as.numeric(row["START"])-30000, as.numeric(row["END"])+30000,
+                                 row["CHROM"])
+      })
+
+apply(SEs.DOWN.bed[c(1:15),],
+      MARGIN = 1,
+      function(row) {
+      plot.and.save.track.Bw.avg("SEs.DOWN.HDAC4peaks", row["LOCUS"], as.numeric(row["START"])-30000, as.numeric(row["END"])+30000,
+                                 row["CHROM"])
+      })
+```
+#Funzione per i replicati separati
+```{r}
+plot.and.save.track.Bw.avg <- function(Sample, locus, from, to, chr) {
+  
+  #creo una highlighttrack per far vedere il picco
+  Highlight_peak <- HighlightTrack(genes38,
+                                   start = from+30000,
+                                   end = to-30000,
+                                   chromosome = chr)
+  
+  pdf(paste0("/media/alessio/Data/hypoxia/ChIPseq/Figure_paper/Tracks_SEs_HDAC4/Sep_replicates/",Sample,"_",locus,".pdf"), height = 20, width = 30)
+  
+  track <- plotTracks(c(#BigWigAverage.Normoxia.Datatracks,
+    H3K27ac.Normoxia.Datatracks[c(1,2,7,8)],
+    H2BK120ac.Normoxia.Datatracks[c(1,2,7,8)],
+    HDAC4_bigwig,
+    Highlight_peak
+  ),
+  # sizes = c(1,1,1,1,1,0.3),
+  from = from,
+  to = to,
+  chromosome = chr,
+  transcriptAnnotation = "gene",
+  showSampleNames = T,
+  col.sampleNames = "black",
+  col.main = "black",
+  background.title = "white",
+  col.title = "black",
+  col.axis = "black",
+  title.width = 2,
+  rotation.title = 0,
+  position.title = "right",
+  labelPos="revAlternating",
+  margin = 200,
+  cex.axis = 1,
+  separator = 0,
+  cex.title = 1
+  ) 
+  
+  dev.off()
+}
+```
+

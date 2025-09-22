@@ -1,0 +1,37 @@
+```{r setup}
+library(tidyverse)
+library(ChIPQC)
+library(DiffBind)
+library(ChIPseeker)
+library(GenomicRanges)
+```
+
+#ChIPqc
+```{r}
+#creo i samplesheet per le due acetilazioni
+coldata_K27 = read.csv("/media/alessio/Data/hypoxia/ChIPseq/experiment.csv") |> 
+  dplyr::filter(Condition == "H3K27AC")
+
+coldata_K120 = read.csv("/media/alessio/Data/hypoxia/ChIPseq/experiment.csv") |> 
+  dplyr::filter(Condition == "H2BK120AC")
+
+#do a ChIPQC il dba object (funziona)  
+DBA_object_K27 <- dba(sampleSheet=coldata_K27, scoreCol = 5)
+DBA_object_K120 <- dba(sampleSheet=coldata_K120, scoreCol = 5)
+
+plot(DBA_object_K27)
+plot(DBA_object_K120)
+
+experiment_K27 <- ChIPQC(experiment = DBA_object_K27)
+experiment_K120 <- ChIPQC(experiment = DBA_object_K120)
+
+#creo due cartelle con i report
+ChIPQCreport(experiment_K27, reportFolder = "ChIPQC_report_H3K27ac")
+ChIPQCreport(experiment_K120, reportFolder = "ChIPQC_report_H2BK120ac")
+```
+
+
+
+
+
+

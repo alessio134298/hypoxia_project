@@ -1,0 +1,594 @@
+```{r setup, echo = FALSE}
+library(ggplot2)
+library(tidyverse)
+library(ggrepel)
+# options('homer_path' = "/home/alessio/tools/Homer/")
+# library(marge)
+library(ChIPpeakAnno)
+library(ChIPseeker)
+library(grid)
+library(gridExtra)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(writexl)
+library(msigdbr)
+library(VennDiagram)
+library(regioneR)
+```
+
+#leggo le liste excel, sia per il confronto tra cell line che fra ipossia e normossia (uso risultati di DiffBind con picchi di macs3)
+```{r}
+read_excel_allsheets <- function(filename, tibble = FALSE) {
+    # I prefer straight data.frames
+    # but if you like tidyverse tibbles (the default with read_excel)
+    # then just pass tibble = TRUE
+    sheets <- readxl::excel_sheets(filename)
+    x <- lapply(sheets, function(X) readxl::read_excel(filename, sheet = X))
+    if(!tibble) x <- lapply(x, as.data.frame)
+    names(x) <- sheets
+    x
+}
+
+H3K27ac.DiffBind.peaks.H4KOvsCAS9 <- read_excel_allsheets("/media/alessio/Data/hypoxia/ChIPseq/tables/H3K27ac_tables/H3K27ac_Diff_bind_peak_annotation_hg38.xlsx")
+
+H3K27ac.DiffBind.peaks.Vs.Normoxia <- read_excel_allsheets("/media/alessio/Data/hypoxia/ChIPseq/tables/H3K27ac_tables/Vs_normoxia/H3K27ac_Vs_normoxia_annotation_total_hg38.xlsx")
+
+H2BK120ac.DiffBind.peaks.H4KOvsCAS9 <- read_excel_allsheets("/media/alessio/Data/hypoxia/ChIPseq/tables/H2BK120ac_tables/H2BK120ac_Diff_bind_peak_annotation_hg38.xlsx")
+
+H2BK120ac.DiffBind.peaks.Vs.Normoxia <- read_excel_allsheets("/media/alessio/Data/hypoxia/ChIPseq/tables/H2BK120ac_tables/Vs_normoxia/H2BK120ac_vs_normoxia_total_hg38.xlsx")
+```
+
+#Aggiungo definizione di Up e Down per FDR e p.value
+```{r}
+Defsig <- function(list) {
+  deflist <- lapply(list, function(df) {
+    defdf <- df %>% 
+      dplyr::mutate(FDR_sign = case_when(
+        (Fold > 0 & FDR < 0.05) ~ "UP",
+        (Fold < -0 & FDR < 0.05) ~ "DOWN",
+        TRUE ~ "ns"
+      )) %>% 
+      dplyr::mutate(p.value_sign = case_when(
+        (Fold > 0 & p.value < 0.05) ~ "UP",
+        (Fold < -0 & p.value < 0.05) ~ "DOWN",
+        TRUE ~ "ns"
+      ))
+    return(defdf)
+  })
+  return(deflist)
+} 
+
+H3K27ac.DiffBind.peaks.H4KOvsCAS9.Defined <- Defsig(H3K27ac.DiffBind.peaks.H4KOvsCAS9)
+H3K27ac.DiffBind.peaks.Vs.Normoxia.Defined <- Defsig(H3K27ac.DiffBind.peaks.Vs.Normoxia)
+H2BK120ac.DiffBind.peaks.H4KOvsCAS9.Defined <- Defsig(H2BK120ac.DiffBind.peaks.H4KOvsCAS9)
+H2BK120ac.DiffBind.peaks.Vs.Normoxia.Defined <- Defsig(H2BK120ac.DiffBind.peaks.Vs.Normoxia)
+```
+
+#savlo excel da mandare al prof
+```{r}
+writexl::write_xlsx(lapply(H3K27ac.DiffBind.peaks.H4KOvsCAS9.Defined, function(df) {
+  filt <- df |> 
+    dplyr::filter(p.value < 0.05) |> 
+    dplyr::select(seqnames, start, end, Fold, p.value, FDR, annotation, SYMBOL)
+  return(filt)
+}), path = "/media/alessio/Data/hypoxia/ChIPseq/Figure_paper/H3K27ac_H4KO_vs_CAS9_p.value_sign.xlsx")
+
+writexl::write_xlsx(lapply(H2BK120ac.DiffBind.peaks.H4KOvsCAS9.Defined, function(df) {
+  filt <- df |> 
+    dplyr::filter(p.value < 0.05) |> 
+    dplyr::select(seqnames, start, end, Fold, p.value, FDR, annotation, SYMBOL)
+  return(filt)
+}), path = "/media/alessio/Data/hypoxia/ChIPseq/Figure_paper/H2BK120ac_H4KO_vs_CAS9_p.value_sign.xlsx")
+```
+
+
+#VolcanoPlot
+```{r}
+Volcano.FDR.pvalue <- function(df, marker) {
+  #conteggio dei valori significativi e assegnazione
+  UP_FDR <- df %>% dplyr::count(FDR_sign == "UP") %>% pull(n)
+  UP_FDR <- UP_FDR[2]
+  DOWN_FDR <- df %>% dplyr::count(FDR_sign == "DOWN") %>% pull(n)
+  DOWN_FDR <- DOWN_FDR[2]
+  UP_p.value <- df %>% dplyr::count(p.value_sign == "UP") %>% pull(n)
+  UP_p.value <- UP_p.value[2]
+  DOWN_p.value <- df %>% dplyr::count(p.value_sign == "DOWN") %>% pull(n)
+  DOWN_p.value <- DOWN_p.value[2]
+  
+  plot <- ggplot(data = df) +
+    geom_point(data = df, aes(x = Fold, y = -log10(p.value)),  color = "black") + 
+      geom_point(data = (df %>% dplyr::filter(p.value < 0.05 & FDR > 0.05)), aes(x = Fold, y = -log10(p.value)), color = "#4baae8")+      
+    geom_point(data = (df %>% dplyr::filter(FDR < 0.05)), aes(x = Fold, y = -log10(p.value)), color = "#eb1719") +
+        # annotate(
+        #   hjust = "right",
+        #   x = c(0,0,0,0), y = c(10,9,8,7),
+        #   geom = "label",
+        #   label = c(UP_FDR,
+        #             DOWN_FDR,
+        #             UP_p.value,
+        #             DOWN_p.value)) +
+    theme_bw() +
+    labs(title = paste0(marker," ",i),
+         tag = paste0("Differential Peaks:\n\n", "Up (FDR) = ",UP_FDR,"\n",
+                      "Down (FDR) = ",DOWN_FDR,"\n",
+                      "Up (p.value) = ",UP_p.value,"\n",
+                      "Down (p.value) = ",DOWN_p.value, "\n\n\n\n",
+                      "Red = FDR significatives\n",
+                      "Blue = p.value siginificatives")
+          ) +
+    theme(plot.title = element_text(hjust = 0.5, size=12),
+          plot.tag.position = c(1.02,.5),
+        plot.tag = element_text(hjust =0, size=9),
+        plot.margin = margin(1, 11, 1, 1, "lines"),
+        )
+   
+    
+  
+  return(plot)
+}
+
+for (i in names(H3K27ac.DiffBind.peaks.H4KOvsCAS9.Defined)) {
+  plot <- Volcano.FDR.pvalue(H3K27ac.DiffBind.peaks.H4KOvsCAS9.Defined[[i]], "H3K27ac")
+  print(plot)
+  #ggsave(plot, filename = paste0("/media/alessio/Data/hypoxia/ChIPseq/plot/Volcano_DiffBind_results/","H3K27ac_",i,".png"), dpi = 300, height =6, width = 9)
+  }
+
+for (i in names(H3K27ac.DiffBind.peaks.Vs.Normoxia.Defined)) {
+  plot <- Volcano.FDR.pvalue(H3K27ac.DiffBind.peaks.Vs.Normoxia.Defined[[i]], "H3K27ac")
+  print(plot)
+  #ggsave(plot, filename = paste0("/media/alessio/Data/hypoxia/ChIPseq/plot/Volcano_DiffBind_results/","H3K27ac_Vs_normoxia_",i,".png"), dpi = 300, height =6, width = 9)
+}
+
+for (i in names(H2BK120ac.DiffBind.peaks.H4KOvsCAS9.Defined)) {
+  plot <- Volcano.FDR.pvalue(H2BK120ac.DiffBind.peaks.H4KOvsCAS9.Defined[[i]], "H2BK120ac")
+  print(plot)
+  #ggsave(plot, filename = paste0("/media/alessio/Data/hypoxia/ChIPseq/plot/Volcano_DiffBind_results/","H2BK120ac_",i,".png"), dpi = 300, height =6, width = 9)
+  }
+
+for (i in names(H2BK120ac.DiffBind.peaks.Vs.Normoxia.Defined)) {
+  plot <- Volcano.FDR.pvalue(H2BK120ac.DiffBind.peaks.Vs.Normoxia.Defined[[i]], "H2BK120ac")
+  print(plot)
+  #ggsave(plot, filename = paste0("/media/alessio/Data/hypoxia/ChIPseq/plot/Volcano_DiffBind_results/","H2BK120ac_Vs_normoxia_",i,".png"), dpi = 300, height =6, width = 9)
+  }
+```
+
+
+#gene ontology enrichment
+#plot Gene Ontology (ALL)
+```{r}
+Filter.Genes.GO <- function(listx, marker) {
+  for (i in names(listx)) {
+    
+    genes.vector.UP <- listx[[i]] |> 
+      dplyr::filter(str_detect(annotation, "Promoter")) %>%   
+      dplyr::filter(Fold > 0 & p.value < 0.05) |> 
+      #dplyr::mutate(gene_id = str_remove(geneId, "\\..*")) %>% 
+      dplyr::select(SYMBOL) |> 
+      unlist()
+    
+    genes.vector.DOWN <- listx[[i]] |> 
+      dplyr::filter(str_detect(annotation, "Promoter")) %>% 
+      dplyr::filter(Fold < -0 & p.value < 0.05) |> 
+      # dplyr::mutate(gene_id = str_remove(geneId, "\\..*")) %>% 
+      dplyr::select(SYMBOL) |> 
+      unlist()
+    
+    GO.UP <- enrichGO(gene = genes.vector.UP,
+                      OrgDb = org.Hs.eg.db,
+                      keyType = "SYMBOL",
+                      ont  = "ALL",
+                      pAdjustMethod = "BH",
+                      qvalueCutoff  = 0.05
+    )
+    GO.DOWN <- enrichGO(gene = genes.vector.DOWN,
+                        OrgDb = org.Hs.eg.db,
+                        keyType = "SYMBOL",
+                        ont  = "ALL",
+                        pAdjustMethod = "BH",
+                        qvalueCutoff  = 0.05
+    )
+    
+    # KEGG.UP <- enrichKEGG(
+    #   gene = genes.vector.UP,
+    #   organism = "hsa"
+    # )
+    # 
+    #  
+    # KEGG.DOWN <- enrichKEGG(
+    #   gene = genes.vector.DOWN,
+    #   organism = "hsa"
+    # )
+    
+    
+    
+    
+    tryCatch({   
+      dotplot.UP <- dotplot(GO.UP,
+                            showCategory=10,
+                            color = "p.adjust",
+                            font.size = 15) +
+        labs(title = str_c(marker," GO enrichment (ALL)"),
+             subtitle = str_c("UP ",i)) + scale_size_area(max_size = 12)
+      
+      print(dotplot.UP)
+      
+      # ggsave(plot = dotplot.UP, filename = paste0("/media/alessio/Data/hypoxia/ChIPseq/plot/GO_enrichment_DiffBind/","UP ",marker,"_GO_enr_",i,".png"), dpi = 300, height = 8, width = 7)
+    }, error =  function(e) {
+      cat("Error:", conditionMessage(e), "\n")
+    })
+    
+    
+    tryCatch({
+      dotplot.DOWN <- dotplot(GO.DOWN,
+                              showCategory=10,
+                              color = "p.adjust",
+                              font.size = 15) +
+        labs(title = str_c(marker," GO enrichment (ALL)"),
+             subtitle = str_c("DOWN ",i)) + scale_size_area(max_size = 12) 
+      
+      print(dotplot.DOWN)
+      
+      # ggsave(plot = dotplot.DOWN, filename = paste0("/media/alessio/Data/hypoxia/ChIPseq/plot/GO_enrichment_DiffBind/","DOWN ",marker,"_GO_enr_",i,".png"), dpi = 300, height = 8, width = 7)
+    }, error =  function(e) {
+      cat("Error:", conditionMessage(e), "\n")
+    })
+  }
+  
+}
+
+Filter.Genes.GO(H3K27ac.DiffBind.peaks.H4KOvsCAS9.Defined, "H3K27ac")
+Filter.Genes.GO(H2BK120ac.DiffBind.peaks.H4KOvsCAS9.Defined, "H2BK120ac")
+Filter.Genes.GO(H3K27ac.DiffBind.peaks.Vs.Normoxia.Defined, "H3K27ac")
+Filter.Genes.GO(H2BK120ac.DiffBind.peaks.Vs.Normoxia.Defined, "H2BK120ac")
+```
+
+#Msigdb enrichment total (salvo excel)
+#Msigdb list
+```{r}
+#creo lista di annotazioni
+sig_names <- c("GO:BP", "GO:CC", "GO:MF", "HPO", "KEGG", "REACTOME", "WIKIPATHWAYS")
+
+retrieve.Msigdbr.list <- function() {
+  
+  listM <- list()
+      
+  for (i in 1:length(sig_names)) {
+      msigdb_df <- msigdbr(species = "Homo sapiens", subcategory = sig_names[[i]]) |> 
+        dplyr::select(gs_name, human_entrez_gene, human_gene_symbol)
+      name = sig_names[[i]]
+      listM[[name]] <- msigdb_df
+  }
+  
+  #aggiungo questa a mano perchè non è nelle subcategories
+  listM[["H"]] <-  msigdbr(species = "Homo sapiens", category = "H") |> 
+  dplyr::select(gs_name, human_entrez_gene)
+
+  return(listM)
+}
+
+Msigdb.list.signatures <- retrieve.Msigdbr.list() 
+```
+
+```{r}
+#Msigdbr enrichment
+return.Msigdbr.Enrichment <- function(listM, Msigdblist) {
+  
+  enrichment.list <- list()
+  
+  for (i in names(listM)) {
+  
+  #creo vettori Up e Down
+  genes.vector.UP <- listM[[i]] |> 
+      dplyr::filter(Fold > 0 & p.value < 0.05) |> 
+      dplyr::select(ENTREZID) |> 
+      unlist()
+  
+  genes.vector.DOWN <- listM[[i]] |> 
+      dplyr::filter(Fold < -0 & p.value < 0.05) |> 
+      dplyr::select(ENTREZID) |> 
+      unlist()
+  
+  #UP enrichment
+  Up.enrichment <- list()
+  
+  for (j in 1:length(Msigdblist)) {
+    enrich_list <- enricher(gene = genes.vector.UP,
+                            TERM2GENE = Msigdblist[[j]],
+                            pAdjustMethod = "BH", qvalueCutoff = 0.5
+                            )
+    Up.enrichment[[j]] <- enrich_list
+    names(Up.enrichment)[[j]] <- gsub(":", "_", names(Msigdblist)[[j]])  
+  }
+  
+  #Down enrichment
+  Down.enrichment <- list()
+  
+  for (j in 1:length(Msigdblist)) {
+    enrich_list <- enricher(gene = genes.vector.DOWN,
+                            TERM2GENE = Msigdblist[[j]],
+                            pAdjustMethod = "BH", qvalueCutoff = 0.5
+                            )
+    Down.enrichment[[j]] <- enrich_list
+    names(Down.enrichment)[[j]] <- gsub(":", "_", names(Msigdblist)[[j]])  
+  }
+  
+  enrichment.list[[paste0("Up_",i)]] <- Up.enrichment
+  enrichment.list[[paste0("Down_",i)]] <- Down.enrichment
+  
+  }
+  
+  return(enrichment.list)
+}
+
+H3K27ac.Msigdb.enrichment <- return.Msigdbr.Enrichment(H3K27ac.DiffBind.peaks.H4KOvsCAS9.Defined, Msigdb.list.signatures)
+H2BK120ac.Msigdb.enrichment <- return.Msigdbr.Enrichment(H2BK120ac.DiffBind.peaks.H4KOvsCAS9.Defined, Msigdb.list.signatures)
+
+
+
+
+
+
+
+
+
+# for (i in 1:length(H3K27ac.Msigdb.enrichment)) {
+#  name = names(H3K27ac.Msigdb.enrichment)[[i]]
+#   name <- gsub(":", "_", name)
+#   openxlsx::write.xlsx(H3K27ac.Msigdb.enrichment[[i]], file = paste0("/media/alessio/Data/hypoxia/ChIPseq/tables/H3K27ac_tables/Msigdb_enrichment/H3K27ac_Msigdb_",name,".xlsx"))
+# }
+# 
+# 
+# for (i in 1:length(H2BK120ac.Msigdb.enrichment)) {
+#  name = names(H2BK120ac.Msigdb.enrichment)[[i]]
+#   name <- gsub(":", "_", name)
+#   openxlsx::write.xlsx(H2BK120ac.Msigdb.enrichment[[i]], file = paste0("/media/alessio/Data/hypoxia/ChIPseq/tables/H2BK120ac_tables/Msigdb_enrichment/H2BK120ac_Msigdb_",name,".xlsx"))
+# }
+```
+
+#Cerco alcuni locus
+```{r}
+Normoxia.H3K27ac.UP <- H3K27ac.DiffBind.peaks.H4KOvsCAS9.Defined$Normoxia_H4KO_vs_CAS9 |> 
+  dplyr::filter(Fold > 0.5) |>
+  dplyr::select(SYMBOL) |> 
+  dplyr::filter(!is.na(SYMBOL)) |> 
+  unlist()
+
+Normoxia.H3K27ac.DOWN <- H3K27ac.DiffBind.peaks.H4KOvsCAS9.Defined$Normoxia_H4KO_vs_CAS9 |> 
+  dplyr::filter(Fold < -0.5) |>
+  dplyr::select(SYMBOL) |> 
+  dplyr::filter(!is.na(SYMBOL)) |> 
+  unlist()
+
+Normoxia.H2BK120ac.UP <- H2BK120ac.DiffBind.peaks.H4KOvsCAS9.Defined$Normoxia_H4KO_vs_CAS9 |> 
+  dplyr::filter(Fold > 0.5) |>
+  dplyr::select(SYMBOL) |> 
+  dplyr::filter(!is.na(SYMBOL)) |> 
+  unlist()
+
+Normoxia.H2BK120ac.DOWN <- H2BK120ac.DiffBind.peaks.H4KOvsCAS9.Defined$Normoxia_H4KO_vs_CAS9 |> 
+  dplyr::filter(Fold < -0.5) |>
+  dplyr::select(SYMBOL) |> 
+  dplyr::filter(!is.na(SYMBOL)) |> 
+  unlist()
+
+X <- Msigdb.list.signatures$`GO:MF` |> 
+  dplyr::filter(gs_name == "GOMF_NUCLEOSIDE_TRIPHOSPHATASE_REGULATOR_ACTIVITY") |> 
+  dplyr::select(human_gene_symbol) |> 
+  unlist()
+
+Normoxia.H3K27ac.UP[Normoxia.H3K27ac.UP %in% X]
+unique(Normoxia.H3K27ac.DOWN[Normoxia.H3K27ac.DOWN %in% X])
+
+Normoxia.H2BK120ac.UP[Normoxia.H2BK120ac.UP %in% X]
+```
+
+
+#Overlap tra Normoxia H3K27ac e H2Bk120ac (sia geni che picchi)
+
+#Geni
+```{r}
+#carico liste
+H3K27ac.DiffBind.peaks.H4KOvsCAS9.significatives <- read_excel_allsheets("/media/alessio/Data/hypoxia/ChIPseq/tables/H3K27ac_tables/H3K27ac_Diff_bind_peak_annotation_significative_Differential.xlsx")
+H2BK120ac.DiffBind.peaks.H4KOvsCAS9.significatives <- read_excel_allsheets("/media/alessio/Data/hypoxia/ChIPseq/tables/H2BK120ac_tables/H2BK120ac_Diff_bind_peak_annotation_significative_Differential.xlsx")
+
+#estraggo geni di picchi Up
+return.normoxia.Up.genes <- function(df) {
+  Up <- df |> 
+    dplyr::filter(Fold > 0) |> 
+    dplyr::select(SYMBOL) |> 
+    unlist()
+  Up <- na.omit(unique(Up))
+  return(Up)
+}
+
+genes.H3K27ac.DiffBind.peaks.normoxia.H4KOvsCAS9.UP <- return.normoxia.Up.genes(H3K27ac.DiffBind.peaks.H4KOvsCAS9.significatives$Normoxia_H4KO_vs_CAS9)
+genes.H2BK120ac.DiffBind.peaks.normoxia.H4KOvsCAS9.UP <- return.normoxia.Up.genes(H2BK120ac.DiffBind.peaks.H4KOvsCAS9.significatives$Normoxia_H4KO_vs_CAS9)
+
+
+VENN <- venn.diagram(
+  x = list(genes.H3K27ac.DiffBind.peaks.normoxia.H4KOvsCAS9.UP, genes.H2BK120ac.DiffBind.peaks.normoxia.H4KOvsCAS9.UP),
+  category.names = c("H3K27ac", "H2BK120ac"),
+  filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/Venn_Up_genes_normoxia_H3K27acxH2BK120ac.png",
+  col=c("black", 'black'),
+  disable.logging = T,
+  fill = c("#F31365", "#91DA73"),
+  # height = 200 , 
+  # width = 250 , 
+  # resolution = 300,
+  # compression = "lzw",
+  #         lwd = 1,
+  cex = 1.5,
+  fontfamily = "sans",
+  #cat.cex = 0.3,
+  cat.default.pos = "outer",
+          cat.pos = c(-27, 27),
+          cat.dist = c(0.055, 0.055),
+          cat.fontfamily = "sans",
+  #main.cex = 0.5,
+  main.fontfamily = "sans",
+  output=TRUE,
+  imagetype = "png",
+  margin = 0.1,
+  force.unique = F,
+  main = "H3K27ac x H2BK120ac upregulated genes"
+)
+
+length(genes.H3K27ac.DiffBind.peaks.normoxia.H4KOvsCAS9.UP)
+length(genes.H2BK120ac.DiffBind.peaks.normoxia.H4KOvsCAS9.UP)
+length(genes.H3K27ac.DiffBind.peaks.normoxia.H4KOvsCAS9.UP[genes.H3K27ac.DiffBind.peaks.normoxia.H4KOvsCAS9.UP %in% genes.H2BK120ac.DiffBind.peaks.normoxia.H4KOvsCAS9.UP])
+
+
+#estraggo geni associati a picchi Down
+return.normoxia.Down.genes <- function(df) {
+  Down <- df |> 
+    dplyr::filter(Fold < 0) |> 
+    dplyr::select(SYMBOL) |> 
+    unlist()
+  Down <- na.omit(unique(Down))
+  return(Down)
+}
+
+genes.H3K27ac.DiffBind.peaks.normoxia.H4KOvsCAS9.Down <- return.normoxia.Down.genes(H3K27ac.DiffBind.peaks.H4KOvsCAS9.significatives$Normoxia_H4KO_vs_CAS9)
+genes.H2BK120ac.DiffBind.peaks.normoxia.H4KOvsCAS9.Down <- return.normoxia.Down.genes(H2BK120ac.DiffBind.peaks.H4KOvsCAS9.significatives$Normoxia_H4KO_vs_CAS9)
+
+
+VENN <- venn.diagram(
+  x = list(genes.H3K27ac.DiffBind.peaks.normoxia.H4KOvsCAS9.Down, genes.H2BK120ac.DiffBind.peaks.normoxia.H4KOvsCAS9.Down),
+  category.names = c("H3K27ac", "H2BK120ac"),
+  filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/Venn_Down_genes_normoxia_H3K27acxH2BK120ac.png",
+  col=c("black", 'black'),
+  disable.logging = T,
+  fill = c("#F31365", "#91DA73"),
+  # height = 200 , 
+  # width = 250 , 
+  # resolution = 300,
+  # compression = "lzw",
+  #         lwd = 1,
+  cex = 1.5,
+  fontfamily = "sans",
+  #cat.cex = 0.3,
+  cat.default.pos = "outer",
+          cat.pos = c(-27, 27),
+          cat.dist = c(0.055, 0.055),
+          cat.fontfamily = "sans",
+  #main.cex = 0.5,
+  main.fontfamily = "sans",
+  output=TRUE,
+  imagetype = "png",
+  margin = 0.1,
+  force.unique = F,
+  main = "H3K27ac x H2BK120ac downregulated genes"
+)
+
+```
+
+#Picchi consensus creati con intersect
+```{r}
+#Carico narrowPeak consensus come Granges
+H3K27ac.Normoxia.consensus.Peaks <- readPeakFile("/media/alessio/Data/hypoxia/ChIPseq/intersection/H3K27AC/H4KO_normoxia_peak_intersect_replicates.bed", as = "GRanges")
+H2BK120ac.Normoxia.consensus.Peaks <- readPeakFile("/media/alessio/Data/hypoxia/ChIPseq/intersection/H2BK120AC/H4KO_normoxia_peak_intersect_replicates.bed", as = "GRanges")
+
+findOverlaps(H3K27ac.Normoxia.consensus.Peaks, H2BK120ac.Normoxia.consensus.Peaks)
+
+#png(filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/Venn_Peaks_consensus_normoxia_H3K27acxH2BK120ac.png", res = 300, units = "cm", height = 15, width = 15)
+makeVennDiagram(Peaks = list(H3K27ac.Normoxia.consensus.Peaks, H2BK120ac.Normoxia.consensus.Peaks),
+                NameOfPeaks = c("H3K27ac", "H2BK120ac"),
+                  col=c("black", 'black'),
+                fill = c("#F31365", "#91DA73"),
+                  #         lwd = 1,
+                cex = 1.5,
+                fontfamily = "sans",
+                #cat.cex = 0.3,
+                  main.fontfamily = "sans",
+                cat.default.pos = "outer",
+                        cat.pos = c(-27, 27),
+                        cat.dist = c(0.055, 0.055),
+                        cat.fontfamily = "sans",
+                  output=TRUE,
+                  main = "H3K27ac x H2BK120ac Peaks",
+                margin = 0.1,
+                 force.unique = F)
+#dev.off()
+```
+
+
+
+#########################################################################################################
+#Analisi dei risultati di DiffBind ai vari tempi di ipossia, analisi tra promotori e regioni intergeniche
+#########################################################################################################
+
+```{r}
+H3K27ac.DiffBind.peaks.Vs.Normoxia.Defined
+H2BK120ac.DiffBind.peaks.Vs.Normoxia.Defined
+```
+
+#Plot distanze dal TSS
+```{r}
+library(scales)
+
+#distanze: 0-1 kb, 1-3 kb, 3-10 kb, 10-100 kb, > 100
+
+Distance_To_TSS_plot <- function(df, title) {
+  
+  if (str_detect(deparse(substitute(title)), "H3K27ac")) {
+    pupi = scale_fill_viridis_d(option = "A")} 
+  else { 
+    pupi = scale_fill_viridis_d(option = "G")}
+  
+  Df_def <- df %>% 
+    dplyr::filter(p.value_sign %in% c("UP", "DOWN")) %>% 
+    dplyr::mutate(distanceToTSS = distanceToTSS / 1000) %>% 
+    dplyr::mutate(Distance = case_when(
+      abs(distanceToTSS) <= 1 ~ "0-1 kb",
+      abs(distanceToTSS) <= 3 & abs(distanceToTSS) > 1 ~ "1-3 kb",
+      abs(distanceToTSS) <= 10 & abs(distanceToTSS) > 3 ~ "3-10 kb",
+      abs(distanceToTSS) <= 100 & abs(distanceToTSS) > 10 ~ "10-100 kb",
+      abs(distanceToTSS) > 100 ~ ">100 kb"
+    )) %>% 
+    dplyr::mutate("Upstream_or_Downstream" = ifelse(distanceToTSS < 0, "Upstream", "Downstream"))
+  
+  # UP <- Df_def %>% 
+  #   dplyr::filter(p.value_sign == "UP")
+  # 
+  # DOWN <- Df_def %>% 
+  #   dplyr::filter(p.value_sign == "DOWN")
+  
+  #print(Df_def)
+  
+  Summarized <- Df_def %>%
+    group_by(p.value_sign, Distance, Upstream_or_Downstream) %>%
+    summarize(Count = n(), .groups = "drop") %>% 
+    dplyr::mutate(Count = ifelse(Upstream_or_Downstream == "Upstream", -Count, Count))
+
+  Plot <- Summarized %>%
+    dplyr::mutate(Distance = fct_relevel(Distance, c(">100 kb", "10-100 kb", "3-10 kb", "1-3 kb", "0-1 kb"))) %>%
+    ggplot(aes(x = p.value_sign, y = Count, fill = Distance)) +
+    geom_col(position = "fill", color = "black") + 
+    pupi +
+    scale_y_continuous(breaks = seq(-1, 1, by = 0.2),
+                       labels = function(x) percent_format(scale = 50)(abs(x))) +
+    coord_flip() +
+    theme_bw() +
+    labs(x = NULL,
+         y = "5' -> 3' Percentage of Peaks",
+         fill = "Distance to TSS",
+         title = title)
+  
+  # return(Plot)
+
+  print(Plot)
+}
+
+
+TSS_dist_plot_H3K27ac_Vs_normoxia_Cas9_24H <- Distance_To_TSS_plot(H3K27ac.DiffBind.peaks.Vs.Normoxia.Defined$CAS9_24h, "H3K27ac Cas9 24h hypoxia")
+TSS_dist_plot_H2BK120ac_Vs_normoxia_Cas9_24H <- Distance_To_TSS_plot(H2BK120ac.DiffBind.peaks.Vs.Normoxia.Defined$CAS9_24h, "H2BK120ac Cas9 24h hypoxia")
+
+TSS_dist_plot_H3K27ac_Vs_normoxia_Cas9_24H
+TSS_dist_plot_H2BK120ac_Vs_normoxia_Cas9_24H
+```
+#Salvo
+```{r}
+ggsave(TSS_dist_plot_H3K27ac_Vs_normoxia_Cas9_24H, file = "plot/TSS_dist_plot_H3K27ac_Vs_normoxia_Cas9_24H.pdf", device = "pdf", height = 4, width = 10)
+ggsave(TSS_dist_plot_H2BK120ac_Vs_normoxia_Cas9_24H, file = "plot/TSS_dist_plot_H2BK120ac_Vs_normoxia_Cas9_24H.pdf", device = "pdf", height = 4, width = 10)
+```
+

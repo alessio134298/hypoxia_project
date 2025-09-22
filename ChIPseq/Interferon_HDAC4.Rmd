@@ -1,0 +1,125 @@
+
+
+#Vedo overlap tra HDAC4 e regioni dei geni interferon
+#Carico i file come Granges, calcolo overlap e riporto in una tabella
+```{r}
+
+#carico i GTF e li trasformo in Granges
+#NB i gtf li filtro per averre solo i GRanges dei geni
+
+GTF.V44.wholegenes <- read.delim("/media/alessio/Data/genome110/gencode/gencode.v44.annotation_noheader.gtf", header = F) |> 
+  dplyr::filter(V3 == "gene") |> 
+  dplyr::select(V1, V4, V5, V7, V9) |> 
+  dplyr::mutate(tmp = str_c(V1, V4, V5, sep = "_")) |> 
+  dplyr::filter(!duplicated(tmp)) |> 
+  dplyr::select(!tmp) |> 
+  dplyr::rename("chr" = V1, "start" = V4, "end" = V5, "strand" = V7, "description" = V9 )
+  
+
+GTF.V44.interferon.alpha <- read.delim("/media/alessio/Data/hypoxia/ChIPseq/GTF_filtered_RNAseq/GTF_V44_Interferon_alpha_genes.gtf", header = F) |>   dplyr::filter(V3 == "gene") |> 
+  dplyr::select(V1, V4, V5, V7, V9)  |> 
+  dplyr::rename("chr" = V1, "start" = V4, "end" = V5, "strand" = V7, "description" = V9 )
+
+GTF.V44.interferon.gamma <- read.delim("/media/alessio/Data/hypoxia/ChIPseq/GTF_filtered_RNAseq/GTF_V44_Interferon_gamma_genes.gtf", header = F) |>   dplyr::filter(V3 == "gene") |> 
+  dplyr::select(V1, V4, V5, V7, V9)  |> 
+  dplyr::rename("chr" = V1, "start" = V4, "end" = V5, "strand" = V7, "description" = V9 )
+
+GTF.V44.wholegenes.GRanges <- makeGRangesFromDataFrame(GTF.V44.wholegenes, keep.extra.columns = T, ignore.strand = F)
+GTF.V44.interferon.alpha.GRanges <- makeGRangesFromDataFrame(GTF.V44.interferon.alpha, keep.extra.columns = T, ignore.strand = F)
+GTF.V44.interferon.gamma.GRanges <- makeGRangesFromDataFrame(GTF.V44.interferon.gamma, keep.extra.columns = T, ignore.strand = F)
+```
+
+#Salvo i file per utilizzi futuri
+```{r}
+write_delim(GTF.V44.wholegenes, file = "/media/alessio/Data/hypoxia/ChIPseq/GencodeV44.onlygenes.bed", delim = "\t", col_names = F)
+write_delim(GTF.V44.interferon.alpha, file = "/media/alessio/Data/hypoxia/ChIPseq/Interferon_alpha.bed", delim = "\t", col_names = F)
+write_delim(GTF.V44.interferon.gamma, file = "/media/alessio/Data/hypoxia/ChIPseq/Interferon_gamma.bed", delim = "\t", col_names = F)
+```
+
+
+#carico bed di HDAC4 ChIP
+```{r}
+#carico HDAC4
+HDAC4.GRanges <- readPeakFile("/media/alessio/Data/hypoxia/ChIPseq/ChIP_atlas_files/HDAC4.ChIP.SKUT1.WT.bed")
+```
+
+#overlap sul TSS e su Genebody
+```{r}
+# Function to get extended TSS regions
+get_extended_tss <- function(gr, upstream = 3000, downstream = 3000) {
+  # For positive strand, TSS is the start
+  pos_strand <- gr[strand(gr) == "+"]
+  pos_tss <- GRanges(seqnames = seqnames(pos_strand),
+                     ranges = IRanges(start = pmax(1, start(pos_strand) - upstream), 
+                                      end = start(pos_strand) + downstream - 1),
+                     strand = strand(pos_strand),
+                     gene_id = pos_strand$gene_id)
+  
+  # For negative strand, TSS is the end
+  neg_strand <- gr[strand(gr) == "-"]
+  neg_tss <- GRanges(seqnames = seqnames(neg_strand),
+                     ranges = IRanges(start = pmax(1, end(neg_strand) - downstream + 1),
+                                      end = end(neg_strand) + upstream),
+                     strand = strand(neg_strand),
+                     gene_id = neg_strand$gene_id)
+  
+  # Combine both
+  tss_granges <- c(pos_tss, neg_tss)
+  return(tss_granges)
+}
+
+TSS.whole.genes <- get_extended_tss(GTF.V44.wholegenes.GRanges)
+TSS.interferon.alpha.genes <- get_extended_tss(GTF.V44.interferon.alpha.GRanges)
+TSS.interferon.gamma.genes <- get_extended_tss(GTF.V44.interferon.gamma.GRanges)
+
+GeneBody.whole.genes.overlap.HDAC4 <- subsetByOverlaps(GTF.V44.wholegenes.GRanges, HDAC4.GRanges)
+GeneBody.interferon.alpha.genes.overlap.HDAC4  <- subsetByOverlaps(GTF.V44.interferon.alpha.GRanges, HDAC4.GRanges)
+GeneBody.interferon.gamma.genes.overlap.HDAC4  <- subsetByOverlaps(GTF.V44.interferon.gamma.GRanges, HDAC4.GRanges)
+
+TSS.whole.genes.overlap.HDAC4 <- subsetByOverlaps(TSS.whole.genes, HDAC4.GRanges)
+TSS.interferon.alpha.genes.overlap.HDAC4 <- subsetByOverlaps(TSS.interferon.alpha.genes, HDAC4.GRanges)
+TSS.interferon.gamma.genes.overlap.HDAC4 <- subsetByOverlaps(TSS.interferon.gamma.genes, HDAC4.GRanges)
+```
+
+#creo report e salvo
+```{r}
+Report.overlap.HDAC4.interferon <- tibble(
+  "Regions" = c("All genes", "interferon alpha genes", "interferon gamma genes"),
+  "Overlaps (gene body)" = c(length(GeneBody.whole.genes.overlap.HDAC4),
+                             length(GeneBody.interferon.alpha.genes.overlap.HDAC4),
+                             length(GeneBody.interferon.gamma.genes.overlap.HDAC4)),
+  "Overlaps (TSS)" = c(length(TSS.whole.genes.overlap.HDAC4),
+                       length(TSS.interferon.alpha.genes.overlap.HDAC4),
+                       length(TSS.interferon.gamma.genes.overlap.HDAC4)),
+  "Number of genes" = c(length(GTF.V44.wholegenes.GRanges),
+                        length(GTF.V44.interferon.alpha.GRanges),
+                        length(GTF.V44.interferon.gamma.GRanges))
+)
+
+Report.overlap.HDAC4.interferon
+
+png(filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/Report_HDAC4ChIP_overlaps_interferongenes.png", units = "cm", width = 20, height = 6, res = 300)
+title <- textGrob("HDAC4 ChIP seq signals overlap", gp = gpar(fontsize = 15))
+image = tableGrob(Report.overlap.HDAC4.interferon, rows = NULL)
+grid.arrange(title, image, ncol = 1,
+              heights = unit.c(unit(0.5, "cm"), unit(4, "cm")))
+dev.off()
+
+```
+
+#riarrangio e salvo la tabella con i valori di Jaccard
+```{r}
+Jaccard <- read.delim("Jaccard.HDAC4.Interferon.tab", header = T)
+Jaccard <- Jaccard[c(1,4,7),] |> 
+  dplyr::mutate(name = c("interferon_alpha", "interferon_gamma", "whole_genes"))
+Jaccard <- Jaccard |> 
+  dplyr::select(3,5) |> 
+  pivot_wider(names_from = name, values_from = jaccard)
+
+png("Jaccard.interferon.png", units = "cm", res = 300, height = 4, width = 15)
+title = textGrob("Jaccard value")
+p <- tableGrob(Jaccard, rows = NULL)
+grid.arrange(title, p, ncol =1,
+              heights = unit.c(unit(0.5, "cm"), unit(2, "cm")))
+dev.off()
+```

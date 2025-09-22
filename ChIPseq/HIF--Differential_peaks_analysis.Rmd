@@ -1,0 +1,607 @@
+```{r setup, echo = FALSE}
+library(ggplot2)
+library(tidyverse)
+library(ggrepel)
+library(ChIPpeakAnno)
+library(ChIPseeker)
+library(grid)
+library(gridExtra)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(writexl)
+library(msigdbr)
+library(VennDiagram)
+library(regioneR)
+```
+
+
+#.############################################################
+#Overlap picchi HIF1a e HIF2a e DiffBind peaks, geni associati
+#.############################################################
+
+#leggo i file risultato di DiffBind
+```{r}
+read_excel_allsheets <- function(filename, tibble = FALSE) {
+    # I prefer straight data.frames
+    # but if you like tidyverse tibbles (the default with read_excel)
+    # then just pass tibble = TRUE
+    sheets <- readxl::excel_sheets(filename)
+    x <- lapply(sheets, function(X) readxl::read_excel(filename, sheet = X))
+    if(!tibble) x <- lapply(x, as.data.frame)
+    names(x) <- sheets
+    x
+}
+
+H3K27ac.DiffBind.peaks.H4KOvsCAS9 <- read_excel_allsheets("/media/alessio/Data/hypoxia/ChIPseq/tables/H3K27ac_tables/H3K27ac_Diff_bind_peak_annotation.xlsx")
+
+H3K27ac.DiffBind.peaks.Vs.Normoxia <- read_excel_allsheets("/media/alessio/Data/hypoxia/ChIPseq/tables/H3K27ac_tables/Vs_normoxia/H3K27ac_Vs_normoxia_annotation_total.xlsx")
+
+H2BK120ac.DiffBind.peaks.H4KOvsCAS9 <- read_excel_allsheets("/media/alessio/Data/hypoxia/ChIPseq/tables/H2BK120ac_tables/H2BK120ac_Diff_bind_peak_annotation.xlsx")
+
+H2BK120ac.DiffBind.peaks.Vs.Normoxia <- read_excel_allsheets("/media/alessio/Data/hypoxia/ChIPseq/tables/H2BK120ac_tables/Vs_normoxia/H2BK120ac_vs_normoxia_total.xlsx")
+
+names(H3K27ac.DiffBind.peaks.Vs.Normoxia) <- str_c(names(H3K27ac.DiffBind.peaks.Vs.Normoxia),"_Vs_normoxia") # aggiungo questa dicitura perchè rende più chiara l'interpretazione più avanti
+names(H2BK120ac.DiffBind.peaks.Vs.Normoxia) <- str_c(names(H2BK120ac.DiffBind.peaks.Vs.Normoxia),"_Vs_normoxia") #idem
+```
+
+#estraggo gli Up e Downregolati, poi metto tutto insieme in una lista unica
+```{r}
+Return_Up_and_Down_Granges <- function(DiffBind_res_list, Marker) {
+
+  
+  Up_list <- lapply(DiffBind_res_list, function(x) {
+    Up <- x %>% 
+      dplyr::filter(Fold > 0 & p.value < 0.05)
+    return(Up)
+  })
+  
+  names(Up_list) <- str_c(Marker,"_Up_", names(Up_list))
+  
+    Down_list <- lapply(DiffBind_res_list, function(x) {
+    Down <- x %>% 
+      dplyr::filter(Fold < -0 & p.value < 0.05)
+    return(Down)
+  })
+    
+  names(Down_list) <- str_c(Marker,"_Down_", names(Down_list))  
+  
+  Tot_list <- c(Up_list, Down_list)
+  
+  Tot_list_Granges <- lapply(Tot_list, function(x) {
+    Granges <- makeGRangesFromDataFrame(x,seqnames.field = "seqnames",
+                                        start.field = "start",
+                                        end.field = "end",
+                                        keep.extra.columns = T)
+    }) 
+  
+   return(Tot_list_Granges)
+}
+
+DiffBind.Results.Up.Down.def.total <- c(Return_Up_and_Down_Granges(H3K27ac.DiffBind.peaks.H4KOvsCAS9, "H3K27ac"),
+                                        Return_Up_and_Down_Granges(H3K27ac.DiffBind.peaks.Vs.Normoxia, "H3K27ac"),
+                                        Return_Up_and_Down_Granges(H2BK120ac.DiffBind.peaks.H4KOvsCAS9, "H2BK120ac"),
+                                        Return_Up_and_Down_Granges(H2BK120ac.DiffBind.peaks.Vs.Normoxia, "H2BK120ac"))
+```
+
+
+#carico il narrowPeak di HIF-1a sulle HutSMC
+# ```{r}
+# HIF1a_Hut <- readPeakFile("/media/alessio/Data/hypoxia/HIF1A_datasets/PRJNA809308/macs3_peaks/SRR18097068_macs3_peaks.narrowPeak") %>% 
+#   sortSeqlevels(.)
+# ```
+
+
+#Calcolo overlap per ciascun campione
+# ```{r, echo=F, message=F, warning=F, results='hide'}
+# for (i in names(DiffBind.Results.Up.Down.def.total)) {
+#   png(str_c("plot/Overlaps_DiffBind_results_HiF1a_Hutsmc/",i,".png"))
+#   Venn <- makeVennDiagram(Peaks = list(DiffBind.Results.Up.Down.def.total[[i]], HIF1a_Hut),
+#                   NameOfPeaks = c(i, "HIF1a_Hut"),
+#                   fill = c(ifelse(str_detect(i, "H3K27ac"), "darkred", "darkgreen"), "white"),
+#                   margin=0.2, 
+#                   disable.logging = T,
+#                   maxgap = 400, 
+#                   connectedPeaks = "keepAll")
+#   
+#   dev.off()
+# }
+# ```
+
+
+#Creo un report e salviamo come tabella excel
+#funzione per creare tabella report
+```{r}
+make_report_overlaps <- function(Peak_list, HIF_peaks, MaxGap) {
+  
+  table <- tibble(comparison = names(Peak_list))
+  
+  olaps <- vector()
+  
+  ToT <- vector()
+  
+  for (i in names(Peak_list)) {
+    Tot_peaks <- length(Peak_list[[i]])
+    
+    N_of_Olaps <- length(findOverlaps(Peak_list[[i]], HIF_peaks, maxgap = MaxGap))
+    
+    olaps <- c(olaps, N_of_Olaps)
+    
+    ToT <- c(ToT, Tot_peaks)
+  }  
+  
+  table <- table %>% 
+    dplyr::mutate(Total_peaks = ToT,
+                  Overlaps_with_HIF1a_peaks = olaps) %>% 
+    dplyr::mutate("%_overlap" = round(((Overlaps_with_HIF1a_peaks / Total_peaks) * 100), digits = 2)) %>% 
+    dplyr::arrange(comparison)
+  
+  return(table)
+}
+```
+
+#applico funzione
+# ```{r}
+# Report_overlaps_HIF1a <- make_report_overlaps(DiffBind.Results.Up.Down.def.total, HIF1a_Hut)
+# ```
+
+#salvataggio
+# ```{r}
+# #openxlsx::write.xlsx(Report_overlaps_HIF1a, file = "tables/Report_Overlaps_DiffBind_res_HIf1a_Hut.xlsx")
+# ```
+
+#calcolo gli overlap facendo una tabella anche sul dato di ChIP con le 4 linee cellulari messe insieme
+```{r}
+HIF1a_4_cell_lines <- readPeakFile("/media/alessio/Data/hypoxia/HIF1A_datasets/PRJNA823676/HIF1a.4.cell.lines.bed") %>% 
+  sortSeqlevels(.)
+
+HIF2a_4_cell_lines <- readPeakFile("/media/alessio/Data/hypoxia/HIF1A_datasets/PRJNA823676/HIF2a.4.cell.lines.bed") %>% 
+  sortSeqlevels(.)
+
+Report_overlaps_HIF1a_4_cell_lines <- make_report_overlaps(DiffBind.Results.Up.Down.def.total, HIF1a_4_cell_lines, -1L)
+Report_overlaps_HIF2a_4_cell_lines <- make_report_overlaps(DiffBind.Results.Up.Down.def.total, HIF2a_4_cell_lines, -1L)
+```
+
+#salvataggio
+```{r}
+#openxlsx::write.xlsx(Report_overlaps_HIF1a_4_cell_lines, file = "tables/Report_Overlaps_DiffBind_res_HIf1a_4_cell_lines.xlsx")
+```
+
+#Calcolo gli overlap anche sul dato di ChIP di ChIP_atlas
+# ```{r}
+# HIF1a_ChIPatlas <- readPeakFile("/media/alessio/Data/hypoxia/HIF1A_datasets/ChIP_atlas/ChIP_atlas_HIF1a_all_cells_at_least_3_cell_lines_with_peak.bed") %>% 
+#   sortSeqlevels(.)
+# 
+# Report_overlaps_HIF1a_ChIPatlas <- make_report_overlaps(DiffBind.Results.Up.Down.def.total, HIF1a_ChIPatlas)
+# ```
+
+
+#carico il bed con tutti i putative binding sites di HIF1a
+```{r}
+HIF1a_all_puttaive_binding_sites <- readPeakFile("/media/alessio/Data/hypoxia/HIF1A_datasets/HIF1a_all_putative_binding_sites.bed")
+Report_HIF1a_all_puttaive_binding_sites <- make_report_overlaps(DiffBind.Results.Up.Down.def.total, HIF1a_all_puttaive_binding_sites, 150)
+```
+
+
+#faccio dei barplot sugli overlap () 
+```{r}
+#Funzione per fare il plot
+Up_and_down_Overlaps_HIF1a_barplot <- function(df, marker) {
+  
+  if (str_detect(deparse(substitute(df)), "HIF1a")) {name = "HIF1a"
+  } else if (str_detect(deparse(substitute(df)), "HIF2a")) {name = "HIF2a"
+  }
+  
+  df %>% 
+    separate_wider_delim(cols = comparison,
+                         delim = "_",
+                         names = c("Marker", "Up_Down", "Comp"),
+                         too_many = "merge") %>% 
+    dplyr::mutate(Up_Down = ifelse(str_detect(Up_Down, "Up"), "More enriched", "Less enriched")) %>% 
+    dplyr::filter(str_detect(Comp, "Vs_normoxia") & Marker == marker) %>% #abbiamo deciso di usare solo questi risultati
+    dplyr::mutate(Comp = fct_relevel(Comp, c("CAS9_6h_Vs_normoxia", "CAS9_24h_Vs_normoxia", "H4KO_6h_Vs_normoxia", "H4KO_24h_Vs_normoxia" ))) %>% 
+  ggplot() +
+    geom_col(aes(x = Comp, y = `%_overlap`, fill = Up_Down),
+             color = "black",
+             position = position_dodge(0.7),
+             width = 0.5) +
+    scale_fill_manual(values = c("More enriched" = "#eb1719", "Less enriched" = "#4baae8")) +
+    theme_bw() +
+    # lims(y = c(0, 17)) +
+    labs(
+      x = NULL,
+      y = str_c("Overlap with ",name," binding sites (%)"),
+      fill = NULL,
+      title = marker
+    ) +
+    theme(
+      axis.text.x = element_text(angle = 45,
+                                 hjust = 1)
+    )
+}
+```
+
+```{r}
+#applico funzione
+H3K27ac_barplot_HIF1a <- Up_and_down_Overlaps_HIF1a_barplot(Report_overlaps_HIF1a_4_cell_lines, "H3K27ac")
+H2BK120ac_barplot_HIF1a <- Up_and_down_Overlaps_HIF1a_barplot(Report_overlaps_HIF1a_4_cell_lines, "H2BK120ac")
+
+H3K27ac_barplot_HIF2a <- Up_and_down_Overlaps_HIF1a_barplot(Report_overlaps_HIF2a_4_cell_lines, "H3K27ac")
+H2BK120ac_barplot_HIF2a <- Up_and_down_Overlaps_HIF1a_barplot(Report_overlaps_HIF2a_4_cell_lines, "H2BK120ac")
+
+H3K27ac_barplot_HIF1a_all_bindings <- Up_and_down_Overlaps_HIF1a_barplot(Report_HIF1a_all_puttaive_binding_sites, "H3K27ac")
+H2BK120ac_barplot_HIF1a_all_bindings <- Up_and_down_Overlaps_HIF1a_barplot(Report_HIF1a_all_puttaive_binding_sites, "H2BK120ac")
+
+H3K27ac_barplot_HIF1a
+H2BK120ac_barplot_HIF1a
+
+H3K27ac_barplot_HIF2a
+H2BK120ac_barplot_HIF2a
+
+H3K27ac_barplot_HIF1a_all_bindings
+H2BK120ac_barplot_HIF1a_all_bindings
+```
+
+#salvataggio
+```{r}
+ggsave(H3K27ac_barplot_HIF1a, filename = "plot/H3K27ac_Overlaps_DiffBind_res_with_HIF1a_4_cell_lines.pdf", height = 6, width = 8)
+ggsave(H2BK120ac_barplot_HIF1a, filename = "plot/H2BK120ac_Overlaps_DiffBind_res_with_HIF1a_4_cell_lines.pdf", height = 6, width = 8)
+
+ggsave(H3K27ac_barplot_HIF2a, filename = "plot/H3K27ac_Overlaps_DiffBind_res_with_HIF2a_4_cell_lines.pdf", height = 6, width = 8)
+ggsave(H2BK120ac_barplot_HIF2a, filename = "plot/H2BK120ac_Overlaps_DiffBind_res_with_HIF2a_4_cell_lines.pdf", height = 6, width = 8)
+
+ggsave(H3K27ac_barplot_HIF1a_all_bindings, filename = "plot/H3K27ac_Overlaps_DiffBind_res_with_HIF1a_all_bindings.pdf", height = 6, width = 8)
+ggsave(H2BK120ac_barplot_HIF1a_all_bindings, filename = "plot/H2BK120ac_Overlaps_DiffBind_res_with_HIF1a_all_bindings.pdf", height = 6, width = 8)
+```
+
+# ```{r}
+# #applico funzione
+# H3K27ac_barplot_ChIPatlas <- Up_and_down_Overlaps_HIF1a_barplot(Report_overlaps_HIF1a_ChIPatlas, "H3K27ac")
+# H2BK120ac_barplot_ChIPatlas <- Up_and_down_Overlaps_HIF1a_barplot(Report_overlaps_HIF1a_ChIPatlas, "H2BK120ac")
+# 
+# H3K27ac_barplot_ChIPatlas
+# H2BK120ac_barplot_ChIPatlas
+# ```
+
+
+
+#Correlazione fra percentuale di overlap e percentuale di promotori
+```{r}
+library(GenomicFeatures)
+
+#Annoto
+#txdb_hg38 <- TxDb.Hsapiens.UCSC.hg38.knownGene::TxDb.Hsapiens.UCSC.hg38.knownGene
+txdb_Gtfv44 <- makeTxDbFromGFF("/media/alessio/Data/genome110/gencode/gencode.v44.annotation.gtf")
+
+Anno <- lapply(DiffBind.Results.Up.Down.def.total, function(gr) {
+  anno <- annotatePeak(gr,
+                       TxDb = txdb_Gtfv44,
+                       annoDb = "org.Hs.eg.db",
+                       level = "gene",
+                       tssRegion = c(-3000, 3000))
+  return(anno)
+})
+
+#Seleziono solo le comparison Vs_normoxia
+Anno_Vsnormoxia <- Anno[str_detect(names(Anno), "Vs_normoxia")]
+```
+
+#salvo i plot sulle annotazioni genomiche
+```{r}
+#plot
+Annobar_H3K27ac <- plotAnnoBar(Anno_Vsnormoxia[str_detect(names(Anno_Vsnormoxia), "H3K27ac")]) + 
+  labs(title = "Genomic Distribution H3K27ac",
+       subtitle = "GTF_v44") + scale_fill_viridis_d()
+
+Annobar_H2BK120ac <- plotAnnoBar(Anno_Vsnormoxia[str_detect(names(Anno_Vsnormoxia), "H2BK120ac")]) + 
+  labs(title = "Genomic Distribution H2BK120ac",
+       subtitle = "GTF_v44") + scale_fill_viridis_d()
+
+Annobar_H3K27ac
+Annobar_H2BK120ac
+```
+
+#salvataggio 
+```{r}
+ggsave(plot = Annobar_H3K27ac, filename = "plot/DiffBind_H3K27ac_genomic_distribution.png", dpi = 300, height = 6, width = 8)
+ggsave(plot = Annobar_H2BK120ac, filename = "plot/DiffBind_H2BK120ac_genomic_distribution.png", dpi = 300, height = 6, width = 8)
+```
+
+
+```{r}
+library(ggpubr)
+#prendo solamente l'info dell'annotazione sul promotre e creo una tabella unico
+Anno_Vsnormoxia_Promoter_detailed_anno <- lapply(names(Anno_Vsnormoxia), function(name) {
+  df <- Anno_Vsnormoxia[[name]]@annoStat %>% as.data.frame() %>% dplyr::mutate(Sample = name) %>% 
+    dplyr::filter(str_detect(Feature, "Promoter"))
+  return(df)
+} 
+) %>% 
+  enframe %>% 
+  unnest(value) %>%
+  dplyr::mutate(Feature_c = "Promoter") %>%
+  group_by(Feature_c, Sample) %>%
+  summarise(Frequency = sum(Frequency))
+
+#Unisco con il report deglin overlpa di HIF1s
+Corr_df_Prmoter_frequency_Overlap_HIF1a_H3K27ac <- Anno_Vsnormoxia_Promoter_detailed_anno %>% 
+  left_join(Report_overlaps_HIF1a_4_cell_lines, join_by("Sample" == "comparison"))
+
+#Plot
+Plot_Corr_df_Promoter_frequency_Overlap_HIF1a_H3K27ac <- Corr_df_Prmoter_frequency_Overlap_HIF1a_H3K27ac %>% 
+  dplyr::mutate(Marker = ifelse(str_detect(Sample, "H3K27ac"), "H3K27ac", "H2BK120ac")) %>% 
+  ggplot(aes(x = `%_overlap`, y = Frequency)) +
+  geom_point(
+  ) +
+  geom_line() +
+  geom_smooth(method = "lm",
+              alpha = 0.5,
+              se = F,
+              linetype = 2,
+              color = "red") +
+  geom_text(aes(label = Sample), size = 3, vjust = 1) +
+  labs(title = "Correlation HIF1a overlaps / % of Peaks on Promoter (-3000/+3000)",
+       x = "% Overlap with HIF1a",
+       y = "Frequency of Peaks on Promoter") +
+  facet_wrap(~ Marker) +
+  theme_bw() +
+  stat_cor(method = "pearson")
+
+Plot_Corr_df_Promoter_frequency_Overlap_HIF1a_H3K27ac  
+```
+
+```{r}
+ggsave(Plot_Corr_df_Promoter_frequency_Overlap_HIF1a_H3K27ac, filename = "plot/Corr_HIF1a_olaps_%_of_peaks_on_promoter.png", dpi = 300, width = 15, height = 8)
+```
+
+
+#Vediamo se queste osservazioni sonoi statisticamente significative
+#Uso la funzione resampleRegions, mi sembra più appropriata, diamo il background su cui fare il resample che sono tutte le regioni di Diffbind
+```{r}
+#Background_regions
+H3K27ac_whole_peaks <- H3K27ac.DiffBind.peaks.H4KOvsCAS9$Normoxia_H4KO_vs_CAS9 %>% #Uno vale l'altro in questo caso, basta avere il background con tutte le regioni
+  makeGRangesFromDataFrame()
+
+H2BK120ac_whole_peaks <- H2BK120ac.DiffBind.peaks.H4KOvsCAS9$Normoxia_H4KO_vs_CAS9 %>% 
+  makeGRangesFromDataFrame()
+
+
+#tengo solo i Vs normoxia
+DiffBind.Results.Up.Down.def.total.only.Vs.normoxia <- DiffBind.Results.Up.Down.def.total[str_detect(names(DiffBind.Results.Up.Down.def.total), "Vs_normoxia")]
+#tengo solo i H4KO vs Cas9
+DiffBind.Results.Up.Down.def.total.only.H4KO.vs.Cas9 <- DiffBind.Results.Up.Down.def.total[str_detect(names(DiffBind.Results.Up.Down.def.total), "Vs_normoxia", negate = T)]
+```
+
+#Funzione per resampling su diffbind results
+```{r}
+#funzione per fare resampling e calcolare overlap
+create_random_overlap <- function(DiffBind_res, TF_peaks, Background_regions) {
+  
+  #Granges random dal risultato di DiffBind
+  random_DiffBind_res <- resampleRegions(
+    DiffBind_res,
+    universe = Background_regions)
+
+  #Calcolo degli overlaps
+  N_of_Olaps <- length(findOverlaps(random_DiffBind_res, TF_peaks))
+  
+  return(N_of_Olaps)
+  
+}
+```
+
+
+#randomization su TF
+```{r}
+#funzione per fare resampling e calcolare overlap
+create_random_overlap <- function(DiffBind_res, TF_peaks) {
+  
+  #Granges random dal TF
+  random_TF <- randomizeRegions(
+    TF_peaks,
+    genome = "hg38",
+    mask = T,
+    allow.overlaps = F,
+    per.chromosome = T)
+
+  #Calcolo degli overlaps
+  N_of_Olaps <- length(findOverlaps(DiffBind_res, random_TF))
+  
+  return(N_of_Olaps)
+  
+}
+```
+
+
+#PERMUTATION TEST
+```{r}
+#Parametri##
+DiffBind.list <- DiffBind.Results.Up.Down.def.total.only.Vs.normoxia #cambio questa con quello che mi serve
+nperm <- 2000 #numer di randomizzazioni
+HIF_peaks <- HIF1a_4_cell_lines #cambio questa con quella che mi serve
+MaxGap = 150
+############
+
+Z_score_P_value_table_overlaps_HIF1a <- tibble() #inizializzo tabella
+Plot_Z_score_P_value_overlaps_HIF1a <- list() #inizializzo lista di plot
+
+for (i in names(DiffBind.list)) {
+  
+  if (str_detect(i, "H3K27ac")) {
+    background_regions = H3K27ac_whole_peaks
+  } else if (str_detect(i, "H2BK120ac")) {
+    background_regions = H2BK120ac_whole_peaks
+  }
+  
+  nperm <- nperm
+  
+  #iterazione della funzione precedente che crea picchi random e calcola gli overlap 
+  Permutated_olps <- replicate(nperm,
+                               create_random_overlap(DiffBind.list[[i]],
+                                                     HIF_peaks,
+                                                     Background_regions = background_regions #tolgo questo se uso la random su TF
+                                                     ))
+  #calcolo intersezioni
+  observed_olaps <- length(findOverlaps(DiffBind.list[[i]],
+                                        HIF_peaks, 
+                                        maxgap = MaxGap))
+  #z-score 
+  Z_score <- (observed_olaps - mean(Permutated_olps)) / sd(Permutated_olps)
+  
+  #p-value 
+  P_value <- 2 * pnorm(-abs(Z_score))
+  
+  #tabella report 
+  tmp.df <- tibble(
+    Sample = i,
+    Z_score = Z_score,
+    P_value = P_value,
+    N_of_peaks = length(DiffBind.list[[i]]),
+    N_of_overlaps = observed_olaps,
+    "%_overlap" = round((observed_olaps / length(DiffBind.list[[i]]) * 100), digits = 2),
+    Length_bg = length(background_regions)
+  )
+  
+  #unisco tabelle (primo output)
+  Z_score_P_value_table_overlaps_HIF1a <- bind_rows(Z_score_P_value_table_overlaps_HIF1a,
+                                                    tmp.df)
+ 
+  meanx = mean(Permutated_olps)
+  
+  #plot (secondo output)
+  Plotx <- Permutated_olps %>%
+    as.data.frame() %>%
+    dplyr::rename("Simulated_olaps" = ".") %>%
+    ggplot() +
+    geom_density(aes(Simulated_olaps,
+                     after_stat(count)),
+                 adjust = 2,
+                 size = 1) +
+    geom_vline(xintercept = meanx,
+               colour = "black",
+               size = 1) +
+    geom_vline(xintercept = observed_olaps,
+               colour = "#ef233c",
+               linetype = 8,
+               size = 1) +
+    # lims(y = c(NA, (observed_olaps + (observed_olaps/10)))) +
+    annotate("text",
+             label = str_c("Z-score: ", round(Z_score, digits = 2), "\n",
+                           "P.value = ", formatC(P_value, format = "e", digits = 2)),
+             x = ifelse((observed_olaps > meanx),
+                        (observed_olaps/1.2),
+                        (observed_olaps*1.3)),
+             y = 40) +
+    labs(x = NULL,
+         title = i,
+         subtitle = str_c("number of perm: ", nperm)) +
+    theme_light()
+  
+  Plot_Z_score_P_value_overlaps_HIF1a[[i]] <- Plotx 
+}
+
+Z_score_P_value_table_overlaps_HIF1a
+Plot_Z_score_P_value_overlaps_HIF1a
+#per ora ho usato solo la randomizzazione dul background dei differenziali, quella sul TF ci mette tantissimo
+```
+
+#salvo tabella
+```{r}
+openxlsx::write.xlsx(Z_score_P_value_table_overlaps_HIF1a, file = "tables/Z_score_P_value_table_overlaps_HIF1a_2000perm_Vs_normoxia.xlsx")
+openxlsx::write.xlsx(Z_score_P_value_table_overlaps_HIF1a, file = "tables/Z_score_P_value_table_overlaps_HIF1a_2000perm_H4KO_Vs_Cas9.xlsx")
+```
+
+#unisco plot in una sola figura e salvo
+```{r}
+library(patchwork)
+
+Patched_Z_score_P_value_plot <- Reduce(`+`, Plot_Z_score_P_value_overlaps_HIF1a)
+
+ggsave(Patched_Z_score_P_value_plot, filename = "plot/HIF1a_all_sites_overlaps_Z_score_P_value_plot.png", dpi = 300, height = 15, width = 25)
+```
+
+
+
+#Ora vediamo i geni associati agli overlap con HIF1a
+```{r}
+library(ChIPseeker)
+library(GenomicFeatures)
+
+txdb = TxDb.Hsapiens.UCSC.hg38.knownGene::TxDb.Hsapiens.UCSC.hg38.knownGene #usiamo questo perchè abbiamo vsto precedentemente che quando si tratta di enrichment è meglio rispetto al gtfV44
+
+txdb_V44 = makeTxDbFromGFF("/media/alessio/Data/genome110/gencode/gencode.v44.annotation.gtf")
+```
+
+<!-- #controllo per vedere se escerisposta all'ipossia -->
+<!-- ```{r} -->
+<!-- HIF1a_5_cell_lines %>%  -->
+<!--   annotatePeak(.,  -->
+<!--                tssRegion = c(-3000, 3000), -->
+<!--                TxDb = txdb_V44, -->
+<!--                annoDb = "org.Hs.eg.db", -->
+<!--                level = "gene") %>%  -->
+<!--   as.data.frame() %>%  -->
+<!--   dplyr::filter(str_detect(annotation, "Promoter")) %>% #seleziono solo picchi sul promotore -->
+<!--   dplyr::select(SYMBOL) %>%  -->
+<!--   unlist() %>%  -->
+<!--   enrichGO(., -->
+<!--            keyType = "SYMBOL", -->
+<!--            ont = "BP", -->
+<!--            OrgDb = "org.Hs.eg.db") %>%  -->
+<!--   dotplot(., title = "Genes marked by HIF1a (Promoters) (GO)" ) %>%  -->
+<!--   ggsave(, filename = "plot/HIF1a_5_cell_lines_GO_enrichment_GTfV44_only_promoter.png", dpi = 300, height = 8, width = 7) -->
+<!-- #Conferma per vedere se dall'arricchimento viene fuori response to hypoxia, esce fuori, si riconferma che se seleziono solo il promotore esce meglio ancora -->
+<!-- ``` -->
+
+#estraggo gli overlap con HIF1a e vediamo geni associati (solo i Vs normoxia)
+```{r}
+#estrazione degli overlap e Annotazione
+Vs.normoxia.in.Overlap.HIF1a.anno <- lapply(DiffBind.Results.Up.Down.def.total.only.Vs.normoxia, function(x) {
+  Res <- subsetByOverlaps(x, HIF1a_4_cell_lines) %>% #overlap 
+      annotatePeak(., 
+               tssRegion = c(-3000, 3000),
+               TxDb = txdb_V44,
+               annoDb = "org.Hs.eg.db",
+               level = "gene")
+  return(Res)
+})
+
+plotAnnoBar(Vs.normoxia.in.Overlap.HIF1a.anno)
+plotDistToTSS(Vs.normoxia.in.Overlap.HIF1a.anno)
+```
+
+#Salvo in un excel le annotazioni
+```{r}
+names(Vs.normoxia.in.Overlap.HIF1a.anno) <- str_replace(names(Vs.normoxia.in.Overlap.HIF1a.anno), "normoxia", "H0") #cambio i nomi perchè il nome degli excel sheet ha un limite di 31 caratteri
+
+openxlsx::write.xlsx(Vs.normoxia.in.Overlap.HIF1a.anno, "tables/Overlaps_HIF1a_annotated_DiffBind_res_Vs_Normoxia_GTFV44.xlsx")
+```
+
+
+#Enrichmemnt e plot
+```{r}
+#enrichment sui geni
+Enrich.GO.Vs.normoxia.in.Overlap.HIF1a.anno <- lapply(Vs.normoxia.in.Overlap.HIF1a.anno, function(x) {
+  enriched <- x %>% 
+    as.data.frame() %>% 
+    dplyr::filter(str_detect(annotation, "Promoter")) %>% #seleziono solo picchi sul promotore
+    dplyr::select(SYMBOL) %>% 
+    unlist() %>% 
+    enrichGO(.,
+             keyType = "SYMBOL",
+             ont = "BP",
+             OrgDb = "org.Hs.eg.db")
+  return(enriched)
+})
+
+
+for (i in names(Enrich.GO.Vs.normoxia.in.Overlap.HIF1a.anno)) {
+  tryCatch({
+    plot <- dotplot(Enrich.GO.Vs.normoxia.in.Overlap.HIF1a.anno[[i]]) +
+      ggtitle(i)
+    
+    print(plot)
+  }, error =  function(e) {
+      cat("Error:", conditionMessage(e), "\n")
+    })
+}  
+```

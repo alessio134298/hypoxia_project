@@ -1,0 +1,601 @@
+```{r setup}
+library(tidyverse)
+library(GenomicRanges)
+library(ChIPseeker)
+library(ggpubr)
+library(ChIPpeakAnno)
+library(org.Hs.eg.db)
+library(scales)
+```
+
+#carico i picchi (narrowPeak) di H3K27ac e H2BK120ac
+```{r}
+path.H3K27ac = "samples/H3K27AC"
+dirs.H3K27ac = list.dirs(path.H3K27ac, full.names = F, recursive = F)
+
+path.H2BK120ac = "samples/H2BK120AC"
+dirs.H2BK120ac = list.dirs(path.H2BK120ac, full.names = F, recursive = F)
+
+ext = "_peaks.narrowPeak"
+
+Peaks.H3K27ac <- list()
+Peaks.H2BK120ac <- list()  
+
+for (i in seq_along(dirs.H3K27ac)) #tanto hanno la stessa lunghezza
+  {
+  tmp.path.H3 <- file.path(path.H3K27ac,dirs.H3K27ac[[i]],str_c(dirs.H3K27ac[[i]],ext)) #H3K27ac
+  tmp.path.H2 <- file.path(path.H2BK120ac,dirs.H2BK120ac[[i]],str_c(dirs.H2BK120ac[[i]],ext)) #H2BK120ac
+  
+  tmp.df.H3 <- readPeakFile(tmp.path.H3, as = "GRanges")
+    colnames(mcols(tmp.df.H3)) = c("Peak", "Score", "punto", "Signal", "(-log10)pvalue.summit", "-log10qvalue.summit", "relative.summit.pos")
+  tmp.df.H2 <- readPeakFile(tmp.path.H2, as = "GRanges") 
+    colnames(mcols(tmp.df.H2)) = c("Peak", "Score", "punto", "Signal", "(-log10)pvalue.summit", "-log10qvalue.summit", "relative.summit.pos")
+  
+  name.H3 <- as.character(dirs.H3K27ac[[i]])
+  name.H2 <- as.character(dirs.H2BK120ac[[i]])
+  
+  Peaks.H3K27ac[[name.H3]] <- tmp.df.H3
+  Peaks.H2BK120ac[[name.H2]] <- tmp.df.H2
+}
+```
+
+#creo delle liste uniche per plottare le regioni genomiche poi
+```{r}
+Tot.narrowPeak.list <- c(Peaks.H3K27ac, Peaks.H2BK120ac)
+
+Normoxia.narrowPeak.list <- Tot.narrowPeak.list[c(1,4,7,10,13,16,19,22)]
+```
+
+
+#Annotazione con ChIPseeker di tutti i picchi
+```{r}
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene::TxDb.Hsapiens.UCSC.hg38.knownGene
+
+Annotated.Tot.narrowPpeak <- lapply(Tot.narrowPeak.list, function(df) {
+    Anno <- annotatePeak(df,
+                         tssRegion = c(-1000, 1000),
+                         TxDb = txdb,
+                         level = "gene",
+                         flankDistance = 5000,
+                         columns = c("ENTREZID", "ENSEMBL", "SYMBOL", "GENENAME"),
+                         annoDb = "org.Hs.eg.db"
+                        )
+    return(Anno)
+  })
+```
+
+#Faccio i plot a mano perchè voglio le annotazioni come dico io
+#sistemo e creo dataframe unico
+```{r}
+#riorganizzo i valori del'annotazione
+Annotated.Tot.narrowPeak.df.simplified <- lapply(Annotated.Tot.narrowPpeak, function(df) {
+  Anno.df <- as.data.frame(df) %>% 
+    dplyr::mutate(Annotation = case_when(
+      str_detect(annotation, "Promoter") ~ "Promoter-TSS",
+      str_detect(annotation, "5' UTR") ~ "5' UTR",
+      str_detect(annotation, "3' UTR") ~ "3' UTR",
+      str_detect(annotation, "Exon") ~ "Exon",
+      str_detect(annotation, "Intron") ~ "Intron",
+      str_detect(annotation, "Downstream") ~ "TES",
+      str_detect(annotation, "Intergenic") ~ "Distal Intergenic"
+    )
+  )
+  return(Anno.df)
+})
+
+#creo un dataframe unico per fare il plot
+Annotated.narrowPeak.dataframe <- tibble()
+
+for (i in names(Annotated.Tot.narrowPeak.df.simplified)) {
+  df <- Annotated.Tot.narrowPeak.df.simplified[[i]] %>% 
+    dplyr::mutate(Sample = i) %>% 
+    dplyr::select(Sample, Annotation)
+  
+  Annotated.narrowPeak.dataframe <- bind_rows(Annotated.narrowPeak.dataframe, df)
+}
+```
+
+#plot regioni genomiche
+#funzione per creare barplot
+```{r}
+Makebarplot <- function(df, vector_of_samples, title, colors) {
+  df <- df %>% 
+    dplyr::filter(Sample %in% vector_of_samples)
+  
+  df %>% 
+    ggplot(aes(x = Sample, fill = Annotation)) +
+    geom_bar(position = "fill", stat = "count", color = "black") +
+    scale_y_continuous(name = "Percentage(%)", labels = label_percent()) +
+    scale_fill_viridis_d(option = colors) +
+    theme_bw() +
+    labs(title = title,
+         x = NULL,
+         fill = "Regions")
+}
+```
+
+```{r}
+order = c("Distal Intergenic", "TES", "3' UTR", "Exon", "Intron", "5' UTR", "Promoter-TSS")
+Annotated.narrowPeak.dataframe$Annotation <- factor(Annotated.narrowPeak.dataframe$Annotation, levels = order)
+
+
+Normoxia.H3K27ac.samples = c("C1A", "C2A", "K125A1", "K26A1")
+Normoxia.H3K27ac.PLot <- Makebarplot(Annotated.narrowPeak.dataframe, Normoxia.H3K27ac.samples, "H3K27ac Genomic Distribution of Peaks", "A")
+
+Normoxia.H2BK120ac.samples = c("C1B", "C2B", "K125B1", "K26B1")
+Normoxia.H2BK120ac.PLot <- Makebarplot(Annotated.narrowPeak.dataframe, Normoxia.H2BK120ac.samples, "H2BK120ac Genomic Distribution of Peaks", "G")
+```
+
+#savlo i plot
+```{r}
+ggsave(Normoxia.H3K27ac.PLot, filename = "/media/alessio/Data/hypoxia/ChIPseq/Figure_paper/H3K27ac/H3K27ac_Normoxia_peaks_positions.png", dpi = 300, height = 8, width = 6)
+ggsave(Normoxia.H2BK120ac.PLot, filename = "/media/alessio/Data/hypoxia/ChIPseq/Figure_paper/H2BK120ac/H2BK120ac_Normoxia_peaks_positions.png", dpi = 300, height = 8, width = 6)
+```
+
+
+#calcolo lunghezza dei picchi e score
+```{r setup}
+Extract.summary.df <- function(list) {
+  
+  #inizializzo
+  df.total <- tibble()
+  
+  for (i in names(list)) {
+    df <- as.data.frame(list[[i]]) %>% 
+      dplyr::mutate(Sample = i)
+    df.total = bind_rows(df.total, df)
+    
+  }
+  
+  df.summary <- df.total %>%
+    group_by(Sample) %>% 
+    summarise(Peaks = n(),
+              Avg.width = round(mean(width), 0),
+              Mdn.width = round(median(width), 0),
+              Avg.Signal = mean(Signal)) %>% 
+    arrange(Sample)
+    
+  
+  return(df.summary)
+}
+```
+
+```{r}
+DF.H3K27ac <- Extract.summary.df(Peaks.H3K27ac)
+DF.H2BK120ac <- Extract.summary.df(Peaks.H2BK120ac)
+
+DF.H3K27ac
+DF.H2BK120ac
+```
+
+#plot
+```{r}
+makecorrplot <- function(df, Marker, colorx) {
+  ggplot(df, aes(x = Peaks, y = Avg.width)) +
+  theme_light() +
+  geom_point(color = colorx) +
+  geom_text(aes(label = Sample),
+            vjust = -1, 
+            hjust = 0.5) +
+  stat_cor(method = "pearson", #pearson perchè ho fatto shapiro.test e ho visto che sono distribuiti uniformemente, inoltre mi aspetto una relazione lineare
+          label.x.npc = 0.4,
+          label.y.npc = "top") +
+  lims(y = c(min(df$Avg.width), max(df$Avg.width) + 50)) +
+  labs(title = Marker,
+       x = "Number of Peaks",
+       y = "Average Width of Peaks") +
+  theme(legend.position = "none")
+}
+
+p1 <- makecorrplot(DF.H3K27ac, "H3K27ac", "purple")
+p2 <- makecorrplot(DF.H2BK120ac, "H2BK120ac", "darkgreen")
+
+Corr_width_count_of_peaks_plot <- p1 | p2
+Corr_width_count_of_peaks_plot
+```
+
+#salvo
+```{r}
+ggsave(Corr_width_count_of_peaks_plot, filename = "plot/Peak_correlation_width_number.png", width = 14, height = 6, dpi = 300)
+```
+
+
+#Overlap dei picchi (solo normoxia)
+```{r}
+Cas9.Normoxia.Overlap.H3K27ac.H2BK120ac <- makeVennDiagram(Peaks = c(Peaks.H3K27ac[c(1,4)], Peaks.H2BK120ac[c(1,4)]),
+                                                           NameOfPeaks = c(Peaks.H3K27ac[c(1,4)], Peaks.H2BK120ac[c(1,4)]))
+
+
+#non va bene, sembra che ci siano meno overlap fra i replicati
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+#carico picchi di IDR
+```{r}
+path.H3K27ac = "IDR/IDR_H3K27AC/idr_results"
+files.H3K27ac = list.files(path.H3K27ac, pattern = "\\.bed$", full.names = F, recursive = F)
+
+path.H2BK120ac = "IDR/IDR_H2BK120AC/idr_results"
+files.H2BK120ac = list.files(path.H2BK120ac, pattern = "\\.bed$", full.names = F, recursive = F)
+
+Peaks.IDR.H3K27ac <- list()
+Peaks.IDR.H2BK120ac <- list()  
+
+for (i in seq_along(files.H3K27ac)) #tanto hanno la stessa lunghezza
+  {
+  tmp.path.H3 <- file.path(path.H3K27ac,files.H3K27ac[[i]]) #H3K27ac
+  tmp.path.H2 <- file.path(path.H2BK120ac,files.H2BK120ac[[i]]) #H2BK120ac
+  
+  tmp.df.H3 <- readPeakFile(tmp.path.H3, as = "GRanges")
+    colnames(mcols(tmp.df.H3)) = c("name", "Score_IDR", "punto",   ".","Signal")
+  tmp.df.H2 <- readPeakFile(tmp.path.H2, as = "GRanges") 
+    colnames(mcols(tmp.df.H2)) = c("name", "Score_IDR", "punto",   ".", "Signal")
+  
+  name.H3 <- as.character(files.H3K27ac[[i]]) %>% 
+    str_remove("_IDR_consensus.bed")
+  name.H2 <- as.character(files.H2BK120ac[[i]]) %>% 
+    str_remove("_IDR_consensus.bed")
+  
+  Peaks.IDR.H3K27ac[[name.H3]] <- tmp.df.H3
+  Peaks.IDR.H2BK120ac[[name.H2]] <- tmp.df.H2
+}
+```
+
+#Annoto i picchi IDR
+```{r}
+library(ChIPseeker)
+
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene::TxDb.Hsapiens.UCSC.hg38.knownGene
+
+Annotated.IDR.peaks.H3K27ac <- lapply(Peaks.IDR.H3K27ac, function(df) {
+    Anno <- annotatePeak(df,
+                           tssRegion = c(-1000, 1000),
+                         TxDb = txdb,
+                         level = "gene",
+                         flankDistance = 5000,
+                         columns = c("ENTREZID", "ENSEMBL", "SYMBOL", "GENENAME"),
+                         annoDb = "org.Hs.eg.db"
+                        )
+    return(Anno)
+  })
+
+Annotated.IDR.peaks.H2BK120ac <- lapply(Peaks.IDR.H2BK120ac, function(df) {
+    Anno <- annotatePeak(df,
+                           tssRegion = c(-1000, 1000),
+                         TxDb = txdb,
+                         level = "gene",
+                         flankDistance = 5000,
+                         columns = c("ENTREZID", "ENSEMBL", "SYMBOL", "GENENAME"),
+                         annoDb = "org.Hs.eg.db"
+                        )
+    return(Anno)
+  })
+```
+
+```{r}
+plotAnnoBar(Annotated.IDR.peaks.H3K27ac) + scale_fill_viridis_d(option = "A")
+plotAnnoBar(Annotated.IDR.peaks.H2BK120ac) + scale_fill_viridis_d(option = "G")
+```
+
+#Plot Venn diagram overlap H3K27ac e H2BK120ac (IDR peaks) (solo normossia)
+```{r, echo=FALSE}
+#pdf(file = "plot/H3K27ac_H2BK120_Cas9_normoxia_overlappingIDRpeaks.pdf", height = 5, width = 6)
+tiff(file = "plot/H3K27ac_H2BK120_Cas9_normoxia_overlappingIDRpeaks.tiff", units = "cm", res = 300, height = 8, width = 10)
+makeVennDiagram(Peaks = list(Peaks.IDR.H3K27ac[[3]],
+                             Peaks.IDR.H2BK120ac[[3]]),
+                NameOfPeaks = c(paste0("H3K27ac_",names(Peaks.IDR.H3K27ac[3])),
+                                paste0("H2BK120ac_",names(Peaks.IDR.H2BK120ac[3]))),
+                fill = c("#F31365" , "#69B437"),
+                margin = 0.2,
+                cat.dist = c(0.1, 0.1),
+                cat.cex = 0.7,
+                cex = 0.7
+                )
+dev.off()
+
+#pdf(file = "plot/H3K27ac_H2BK120_H4KO_normoxia_overlappingIDRpeaks.pdf", height = 5, width = 6)
+tiff(file = "plot/H3K27ac_H2BK120_H4KO_normoxia_overlappingIDRpeaks.tiff", units = "cm", res = 300, height = 8, width = 10)
+makeVennDiagram(Peaks = list(Peaks.IDR.H3K27ac[[6]],
+                             Peaks.IDR.H2BK120ac[[6]]),
+                NameOfPeaks = c(paste0("H3K27ac_",names(Peaks.IDR.H3K27ac[6])),
+                                paste0("H2BK120ac_",names(Peaks.IDR.H2BK120ac[6]))),
+                fill = c("#F31365" , "#69B437"),
+                margin = 0.2,
+                cat.dist = c(0.1, 0.1),
+                cat.cex = 0.7,
+                cex = 0.7
+                )
+dev.off()
+# "#32004F" "#7323A8" "#F31365" "#C3122F" 
+# "#69B437" "#91DA73" "#165A54"  "#0E3338"
+```
+
+#suddividiamo i picchi in comuni, esclusivi di una condizione e dell altra, vediamo la lunghezza media dei picchi
+```{r, warning=FALSE}
+intersected.peaks.normoxia <- list(
+  Cas9.AllPeaks.H3K27ac = Peaks.IDR.H3K27ac$Cas9_normoxia,
+  Cas9.AllPeaks.H2BK120ac = Peaks.IDR.H2BK120ac$Cas9_normoxia,
+  Cas9.CommonPeaks.H3K27ac.on.H2BK120ac = subsetByOverlaps(Peaks.IDR.H3K27ac$Cas9_normoxia, Peaks.IDR.H2BK120ac$Cas9_normoxia),
+  Cas9.CommonPeaks.H2BK120ac.on.H3K27ac = subsetByOverlaps(Peaks.IDR.H2BK120ac$Cas9_normoxia, Peaks.IDR.H3K27ac$Cas9_normoxia),
+  Cas9.ExclusivePeaks.H3K27ac = subsetByOverlaps(Peaks.IDR.H3K27ac$Cas9_normoxia, Peaks.IDR.H2BK120ac$Cas9_normoxia, invert = T),
+  Cas9.ExclusivePeaks.H2BK120ac = subsetByOverlaps(Peaks.IDR.H2BK120ac$Cas9_normoxia, Peaks.IDR.H3K27ac$Cas9_normoxia, invert = T),
+  H4KO.AllPeaks.H3K27ac = Peaks.IDR.H3K27ac$H4KO_normoxia,
+  H4KO.AllPeaks.H2BK120ac = Peaks.IDR.H2BK120ac$H4KO_normoxia,
+  H4KO.CommonPeaks.H3K27ac.on.H2BK120ac = subsetByOverlaps(Peaks.IDR.H3K27ac$H4KO_normoxia, Peaks.IDR.H2BK120ac$H4KO_normoxia),
+  H4KO.CommonPeaks.H2BK120ac.on.H3K27ac = subsetByOverlaps(Peaks.IDR.H2BK120ac$H4KO_normoxia, Peaks.IDR.H3K27ac$H4KO_normoxia),
+  H4KO.ExclusivePeaks.H3K27ac = subsetByOverlaps(Peaks.IDR.H3K27ac$H4KO_normoxia, Peaks.IDR.H2BK120ac$H4KO_normoxia, invert = T),
+  H4KO.ExclusivePeaks.H2BK120ac = subsetByOverlaps(Peaks.IDR.H2BK120ac$H4KO_normoxia, Peaks.IDR.H3K27ac$H4KO_normoxia, invert = T)
+)
+```
+
+#reciclo la funzione usata in precedenza ma eliminando lo score che non ho
+```{r}
+Summary.intersections.normoxia <- Extract.summary.df(intersected.peaks.normoxia)
+
+Summary.intersections.normoxia
+```
+
+#salvo come tabella
+```{r}
+openxlsx::write.xlsx(Summary.intersections.normoxia, file = "tables/Report_intersection_normoxia_H3K27ac_H2BK120ac.xlsx")
+```
+
+#Annoato tutti i picchi
+```{r}
+library(ChIPseeker)
+
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene::TxDb.Hsapiens.UCSC.hg38.knownGene
+
+Annotated.intersected.peaks.normoxia <- lapply(intersected.peaks.normoxia, function(df) {
+    Anno <- annotatePeak(df,
+                           tssRegion = c(-1000, 1000),
+                         TxDb = txdb,
+                         level = "gene",
+                         flankDistance = 5000,
+                         columns = c("ENTREZID", "ENSEMBL", "SYMBOL", "GENENAME"),
+                         annoDb = "org.Hs.eg.db"
+                        )
+    return(Anno)
+  })
+
+plotAnnoBar(Annotated.intersected.peaks.normoxia)
+```
+
+#sistemo tabella
+```{r}
+#riorganizzo i valori del'annotazione
+Annotated.intersected.peaks.normoxia.df.simplified <- lapply(Annotated.intersected.peaks.normoxia, function(df) {
+  Anno.df <- as.data.frame(df) %>% 
+    dplyr::mutate(Annotation = case_when(
+      str_detect(annotation, "Promoter") ~ "Promoter-TSS",
+      str_detect(annotation, "5' UTR") ~ "5' UTR",
+      str_detect(annotation, "3' UTR") ~ "3' UTR",
+      str_detect(annotation, "Exon") ~ "Exon",
+      str_detect(annotation, "Intron") ~ "Intron",
+      str_detect(annotation, "Downstream") ~ "TES",
+      str_detect(annotation, "Intergenic") ~ "Distal Intergenic"
+    )
+  )
+  return(Anno.df)
+})
+
+#creo un dataframe unico per fare il plot
+Annotated.intersected.peaks.normoxia.dataframe <- tibble()
+
+for (i in names(Annotated.intersected.peaks.normoxia.df.simplified)) {
+  df <- Annotated.intersected.peaks.normoxia.df.simplified[[i]] %>% 
+    dplyr::mutate(Sample = i) %>% 
+    dplyr::select(Sample, Annotation) %>% 
+    dplyr::mutate(marker = ifelse(str_detect(Sample, "H3K27ac"), "H3K27ac", "H2BK120ac"))
+  
+  Annotated.intersected.peaks.normoxia.dataframe <- bind_rows(Annotated.intersected.peaks.normoxia.dataframe, df)
+}
+```
+
+
+
+#Plot (riciclo funzione usata prima per i narrowpeak)
+```{r}
+library(patchwork)
+
+order = c("Distal Intergenic", "TES", "3' UTR", "Exon", "Intron", "5' UTR", "Promoter-TSS")
+#order.samples = c("Cas9.ExclusivePeaks.H3K27ac", "Cas9.ExclusivePeaks.H2BK120ac", "H4KO.ExclusivePeaks.H3K27ac", "H4KO.ExclusivePeaks.H2BK120ac")
+Annotated.intersected.peaks.normoxia.dataframe$Annotation <- factor(Annotated.intersected.peaks.normoxia.dataframe$Annotation, levels = order)
+#Annotated.intersected.peaks.normoxia.dataframe$Sample <- factor(Annotated.intersected.peaks.normoxia.dataframe$Sample, levels = order.samples)
+
+interest.samples.H3K27ac = c("Cas9.ExclusivePeaks.H3K27ac", "H4KO.ExclusivePeaks.H3K27ac")
+interest.samples.H2BK120ac = c("Cas9.ExclusivePeaks.H2BK120ac", "H4KO.ExclusivePeaks.H2BK120ac")
+
+Intersections.PLot.H3K27ac <- Makebarplot(Annotated.intersected.peaks.normoxia.dataframe, interest.samples.H3K27ac, NULL, "A")
+Intersections.PLot.H2BK120ac <- Makebarplot(Annotated.intersected.peaks.normoxia.dataframe, interest.samples.H2BK120ac, NULL, "G")
+
+Intersections.PLot <- Intersections.PLot.H3K27ac  | Intersections.PLot.H2BK120ac
+Intersections.PLot
+```
+
+#savlo il plot
+```{r}
+ggsave(Intersections.PLot, file = "plot/Annobar_intersected_peaks_exclusive_normoxia.png", height = 8, width = 9, dpi = 300)
+```
+
+
+#salvo dei bed files nella cartella IDR 
+```{r}
+path = "/media/alessio/Data/hypoxia/ChIPseq/IDR/intersections_H3K27acxH2BK120"
+
+for (i in names(intersected.peaks.normoxia)) {
+  write_delim(as.data.frame(intersected.peaks.normoxia[[i]]), delim = "\t", col_names = F, quote = "none", file = file.path(path,str_c(i,".bed"))) 
+}
+
+```
+
+
+#plotto con Deeptools
+#creo due matrix una per Cas9 e una per H4KO, usando i picchi specifici di ciascun marker come bed
+```{bash}
+computeMatrix reference-point --referencePoint center --missingDataAsZero --upstream 5000 --downstream 5000 -p 10 -R IDR/intersections_H3K27acxH2BK120/Cas9.ExclusivePeaks.H3K27ac.bed IDR/intersections_H3K27acxH2BK120/Cas9.ExclusivePeaks.H2BK120ac.bed IDR/intersections_H3K27acxH2BK120/Cas9.CommonPeaks.btmerged.bed -S /media/alessio/Data/hypoxia/ChIPseq/samples/H3K27AC/C1A/C1A_RPKM.bw /media/alessio/Data/hypoxia/ChIPseq/samples/H3K27AC/C2A/C2A_RPKM.bw /media/alessio/Data/hypoxia/ChIPseq/samples/H2BK120AC/C1B/C1B_RPKM.bw /media/alessio/Data/hypoxia/ChIPseq/samples/H2BK120AC/C2B/C2B_RPKM.bw -o /media/alessio/Data/hypoxia/ChIPseq/IDR/intersections_H3K27acxH2BK120/Normoxia_Cas9_H3K27ac_x_H2BK120ac_intersections.gz --smartLabels
+
+
+computeMatrix reference-point --referencePoint center --missingDataAsZero --upstream 5000 --downstream 5000 -p 10 -R IDR/intersections_H3K27acxH2BK120/H4KO.ExclusivePeaks.H3K27ac.bed IDR/intersections_H3K27acxH2BK120/H4KO.ExclusivePeaks.H2BK120ac.bed IDR/intersections_H3K27acxH2BK120/H4KO.CommonPeaks.btmerged.bed -S /media/alessio/Data/hypoxia/ChIPseq/samples/H3K27AC/K125A1/K125A1_RPKM.bw  /media/alessio/Data/hypoxia/ChIPseq/samples/H3K27AC/K26A1/K26A1_RPKM.bw /media/alessio/Data/hypoxia/ChIPseq/samples/H2BK120AC/K125B1/K125B1_RPKM.bw  /media/alessio/Data/hypoxia/ChIPseq/samples/H2BK120AC/K26B1/K26B1_RPKM.bw -o /media/alessio/Data/hypoxia/ChIPseq/IDR/intersections_H3K27acxH2BK120/Normoxia_H4KO_H3K27ac_x_H2BK120ac_intersections.gz --smartLabels
+```
+
+```{bash}
+plotProfile -m /media/alessio/Data/hypoxia/ChIPseq/IDR/intersections_H3K27acxH2BK120/Normoxia_Cas9_H3K27ac_x_H2BK120ac_intersections.gz -out Normoxia_Cas9_H3K27ac_x_H2BK120ac_intersections.pdf --numPlotsPerRow 3 --plotTitle "Normoxia Cas9 H3K27ac x H2BK120ac intersections" --perGroup --plotHeight 10 --plotWidth 15 --colors "#32004F" "#7323A8" "#69B437" "#91DA73" --plotFileFormat "pdf"
+
+plotProfile -m /media/alessio/Data/hypoxia/ChIPseq/IDR/intersections_H3K27acxH2BK120/Normoxia_H4KO_H3K27ac_x_H2BK120ac_intersections.gz -out Normoxia_H4KO_H3K27ac_x_H2BK120ac_intersections.pdf --numPlotsPerRow 3 --plotTitle "Normoxia H4KO H3K27ac x H2BK120ac intersections" --perGroup --plotHeight 10 --plotWidth 15 --colors "#F31365" "#C3122F" "#165A54" "#0E3338" --plotFileFormat "pdf"
+```
+
+#faccio la stessa cosa ma con scale regions
+```{bash}
+computeMatrix scale-regions --missingDataAsZero --upstream 1000 --downstream 1000 -p 10 -R IDR/intersections_H3K27acxH2BK120/Cas9.ExclusivePeaks.H3K27ac.bed IDR/intersections_H3K27acxH2BK120/Cas9.ExclusivePeaks.H2BK120ac.bed IDR/intersections_H3K27acxH2BK120/Cas9.CommonPeaks.btmerged.bed -S /media/alessio/Data/hypoxia/ChIPseq/samples/H3K27AC/C1A/C1A_RPKM.bw /media/alessio/Data/hypoxia/ChIPseq/samples/H3K27AC/C2A/C2A_RPKM.bw /media/alessio/Data/hypoxia/ChIPseq/samples/H2BK120AC/C1B/C1B_RPKM.bw /media/alessio/Data/hypoxia/ChIPseq/samples/H2BK120AC/C2B/C2B_RPKM.bw -o /media/alessio/Data/hypoxia/ChIPseq/IDR/intersections_H3K27acxH2BK120/Normoxia_Cas9_H3K27ac_x_H2BK120ac_intersections_scaledregions.gz --smartLabels --startLabel "Peak start" --endLabel "Peak end"
+
+
+computeMatrix scale-regions --missingDataAsZero --upstream 1000 --downstream 1000 -p 10 -R IDR/intersections_H3K27acxH2BK120/H4KO.ExclusivePeaks.H3K27ac.bed IDR/intersections_H3K27acxH2BK120/H4KO.ExclusivePeaks.H2BK120ac.bed IDR/intersections_H3K27acxH2BK120/H4KO.CommonPeaks.btmerged.bed -S /media/alessio/Data/hypoxia/ChIPseq/samples/H3K27AC/K125A1/K125A1_RPKM.bw  /media/alessio/Data/hypoxia/ChIPseq/samples/H3K27AC/K26A1/K26A1_RPKM.bw /media/alessio/Data/hypoxia/ChIPseq/samples/H2BK120AC/K125B1/K125B1_RPKM.bw  /media/alessio/Data/hypoxia/ChIPseq/samples/H2BK120AC/K26B1/K26B1_RPKM.bw -o /media/alessio/Data/hypoxia/ChIPseq/IDR/intersections_H3K27acxH2BK120/Normoxia_H4KO_H3K27ac_x_H2BK120ac_intersections_scaledregions.gz --smartLabels --startLabel "Peak start" --endLabel "Peak end"
+```
+
+```{bash}
+plotProfile -m /media/alessio/Data/hypoxia/ChIPseq/IDR/intersections_H3K27acxH2BK120/Normoxia_Cas9_H3K27ac_x_H2BK120ac_intersections_scaledregions.gz -out Normoxia_Cas9_H3K27ac_x_H2BK120ac_intersections_scaleregions.png --numPlotsPerRow 3 --plotTitle "Normoxia Cas9 H3K27ac x H2BK120ac intersections" --perGroup --plotHeight 10 --plotWidth 15 --colors "#32004F" "#7323A8" "#69B437" "#91DA73" --startLabel "Peak start" --endLabel "Peak end"
+
+plotProfile -m /media/alessio/Data/hypoxia/ChIPseq/IDR/intersections_H3K27acxH2BK120/Normoxia_H4KO_H3K27ac_x_H2BK120ac_intersections_scaledregions.gz -out Normoxia_H4KO_H3K27ac_x_H2BK120ac_intersections_scaleregions.png --numPlotsPerRow 3 --plotTitle "Normoxia H4KO H3K27ac x H2BK120ac intersections" --perGroup --plotHeight 10 --plotWidth 15 --colors "#F31365" "#C3122F" "#165A54" "#0E3338" --startLabel "Peak start" --endLabel "Peak end"
+```
+
+#Go enrichment su tutti i confronti
+```{r}
+library(clusterProfiler)
+Go.enrichment.Annotated.intersected.peaks.normoxia.df.simplified <- lapply(Annotated.intersected.peaks.normoxia.df.simplified, function(df) {
+  GO.enr <- enrichGO(gene = df$SYMBOL, 
+                     OrgDb = org.Hs.eg.db,
+                    keyType = "SYMBOL",
+                    ont  = "BP",
+                    pAdjustMethod = "BH",
+                    qvalueCutoff  = 0.05)
+  return(GO.enr)
+})
+```
+
+#plot
+```{r}
+for (i in names(Go.enrichment.Annotated.intersected.peaks.normoxia.df.simplified)) {
+  dotplot <- dotplot(Go.enrichment.Annotated.intersected.peaks.normoxia.df.simplified[[i]], 
+                     showCategory=20,
+                     color = "p.adjust",
+                    title = i) 
+  print(dotplot)
+}
+```
+
+#separo i TSS, intergenici e Gene Body ulteriormente e salvo dei bed
+```{r}
+path = "IDR/intersections_H3K27acxH2BK120/intersections_TSS_intergenic_splitted"
+
+lapply(names(Annotated.intersected.peaks.normoxia.df.simplified), function(name) {
+  
+  onlyTSS <- Annotated.intersected.peaks.normoxia.df.simplified[[name]] %>% 
+    dplyr::filter(Annotation == "Promoter-TSS") %>% 
+    dplyr::select(seqnames, start, end, SYMBOL, Annotation)
+  
+  onlyIntergenic <- Annotated.intersected.peaks.normoxia.df.simplified[[name]] %>% 
+    dplyr::filter(Annotation == "Distal Intergenic") %>% 
+    dplyr::select(seqnames, start, end, SYMBOL, Annotation)
+  
+  onlyGenebody <- Annotated.intersected.peaks.normoxia.df.simplified[[name]] %>% 
+    dplyr::filter(Annotation %in% c("Exon", "5' UTR", "Intron", "3' UTR", "TES" )) %>% 
+    dplyr::select(seqnames, start, end, SYMBOL, Annotation)
+  
+ write_delim(onlyTSS, delim = "\t", col_names = F, quote = "none", file = file.path(path,str_c(name,".onlyTSS.bed"))) 
+ write_delim(onlyIntergenic, delim = "\t", col_names = F, quote = "none", file = file.path(path,str_c(name,".onlyIntergenic.bed")))  
+ write_delim(onlyGenebody, delim = "\t", col_names = F, quote = "none", file = file.path(path,str_c(name,".onlyGeneBody.bed"))) 
+  
+})
+```
+
+#rifaccio gli stessi plot sui profili con i bed splittati in TSS, intergenici e Gene body
+```{bash}
+#TSS
+computeMatrix reference-point --referencePoint center --missingDataAsZero --upstream 5000 --downstream 5000 -p 10 -R IDR/intersections_H3K27acxH2BK120/intersections_TSS_intergenic_splitted/Cas9.ExclusivePeaks.H3K27ac.onlyTSS.bed IDR/intersections_H3K27acxH2BK120/intersections_TSS_intergenic_splitted/Cas9.ExclusivePeaks.H2BK120ac.onlyTSS.bed IDR/intersections_H3K27acxH2BK120/intersections_TSS_intergenic_splitted/Cas9.CommonPeaks.onlyTSS.btmerged.bed -S /media/alessio/Data/hypoxia/ChIPseq/samples/H3K27AC/C1A/C1A_RPKM.bw /media/alessio/Data/hypoxia/ChIPseq/samples/H3K27AC/C2A/C2A_RPKM.bw /media/alessio/Data/hypoxia/ChIPseq/samples/H2BK120AC/C1B/C1B_RPKM.bw /media/alessio/Data/hypoxia/ChIPseq/samples/H2BK120AC/C2B/C2B_RPKM.bw -o /media/alessio/Data/hypoxia/ChIPseq/IDR/intersections_H3K27acxH2BK120/Normoxia_Cas9_H3K27ac_x_H2BK120ac_intersections_onlyTSS.gz --smartLabels
+
+computeMatrix reference-point --referencePoint center --missingDataAsZero --upstream 5000 --downstream 5000 -p 10 -R IDR/intersections_H3K27acxH2BK120/intersections_TSS_intergenic_splitted/H4KO.ExclusivePeaks.H3K27ac.onlyTSS.bed IDR/intersections_H3K27acxH2BK120/intersections_TSS_intergenic_splitted/H4KO.ExclusivePeaks.H2BK120ac.onlyTSS.bed IDR/intersections_H3K27acxH2BK120/intersections_TSS_intergenic_splitted/H4KO.CommonPeaks.onlyTSS.btmerged.bed -S /media/alessio/Data/hypoxia/ChIPseq/samples/H3K27AC/K125A1/K125A1_RPKM.bw  /media/alessio/Data/hypoxia/ChIPseq/samples/H3K27AC/K26A1/K26A1_RPKM.bw /media/alessio/Data/hypoxia/ChIPseq/samples/H2BK120AC/K125B1/K125B1_RPKM.bw  /media/alessio/Data/hypoxia/ChIPseq/samples/H2BK120AC/K26B1/K26B1_RPKM.bw -o /media/alessio/Data/hypoxia/ChIPseq/IDR/intersections_H3K27acxH2BK120/Normoxia_H4KO_H3K27ac_x_H2BK120ac_intersections_onlyTSS.gz --smartLabels
+
+
+#Intergenici
+computeMatrix reference-point --referencePoint center --missingDataAsZero --upstream 5000 --downstream 5000 -p 10 -R IDR/intersections_H3K27acxH2BK120/intersections_TSS_intergenic_splitted/Cas9.ExclusivePeaks.H3K27ac.onlyIntergenic.bed IDR/intersections_H3K27acxH2BK120/intersections_TSS_intergenic_splitted/Cas9.ExclusivePeaks.H2BK120ac.onlyIntergenic.bed IDR/intersections_H3K27acxH2BK120/intersections_TSS_intergenic_splitted/Cas9.CommonPeaks.onlyIntergenic.btmerged.bed -S /media/alessio/Data/hypoxia/ChIPseq/samples/H3K27AC/C1A/C1A_RPKM.bw /media/alessio/Data/hypoxia/ChIPseq/samples/H3K27AC/C2A/C2A_RPKM.bw /media/alessio/Data/hypoxia/ChIPseq/samples/H2BK120AC/C1B/C1B_RPKM.bw /media/alessio/Data/hypoxia/ChIPseq/samples/H2BK120AC/C2B/C2B_RPKM.bw -o /media/alessio/Data/hypoxia/ChIPseq/IDR/intersections_H3K27acxH2BK120/Normoxia_Cas9_H3K27ac_x_H2BK120ac_intersections_onlyIntergenic.gz --smartLabels
+
+computeMatrix reference-point --referencePoint center --missingDataAsZero --upstream 5000 --downstream 5000 -p 10 -R IDR/intersections_H3K27acxH2BK120/intersections_TSS_intergenic_splitted/H4KO.ExclusivePeaks.H3K27ac.onlyIntergenic.bed IDR/intersections_H3K27acxH2BK120/intersections_TSS_intergenic_splitted/H4KO.ExclusivePeaks.H2BK120ac.onlyIntergenic.bed IDR/intersections_H3K27acxH2BK120/intersections_TSS_intergenic_splitted/H4KO.CommonPeaks.onlyIntergenic.btmerged.bed -S /media/alessio/Data/hypoxia/ChIPseq/samples/H3K27AC/K125A1/K125A1_RPKM.bw  /media/alessio/Data/hypoxia/ChIPseq/samples/H3K27AC/K26A1/K26A1_RPKM.bw /media/alessio/Data/hypoxia/ChIPseq/samples/H2BK120AC/K125B1/K125B1_RPKM.bw  /media/alessio/Data/hypoxia/ChIPseq/samples/H2BK120AC/K26B1/K26B1_RPKM.bw -o /media/alessio/Data/hypoxia/ChIPseq/IDR/intersections_H3K27acxH2BK120/Normoxia_H4KO_H3K27ac_x_H2BK120ac_intersections_onlyIntergenic.gz --smartLabels
+
+
+#Gene Body
+computeMatrix reference-point --referencePoint center --missingDataAsZero --upstream 5000 --downstream 5000 -p 10 -R IDR/intersections_H3K27acxH2BK120/intersections_TSS_intergenic_splitted/Cas9.ExclusivePeaks.H3K27ac.onlyGeneBody.bed IDR/intersections_H3K27acxH2BK120/intersections_TSS_intergenic_splitted/Cas9.ExclusivePeaks.H2BK120ac.onlyGeneBody.bed IDR/intersections_H3K27acxH2BK120/intersections_TSS_intergenic_splitted/Cas9.CommonPeaks.onlyGeneBody.btmerged.bed -S /media/alessio/Data/hypoxia/ChIPseq/samples/H3K27AC/C1A/C1A_RPKM.bw /media/alessio/Data/hypoxia/ChIPseq/samples/H3K27AC/C2A/C2A_RPKM.bw /media/alessio/Data/hypoxia/ChIPseq/samples/H2BK120AC/C1B/C1B_RPKM.bw /media/alessio/Data/hypoxia/ChIPseq/samples/H2BK120AC/C2B/C2B_RPKM.bw -o /media/alessio/Data/hypoxia/ChIPseq/IDR/intersections_H3K27acxH2BK120/Normoxia_Cas9_H3K27ac_x_H2BK120ac_intersections_onlyGeneBody.gz --smartLabels
+
+computeMatrix reference-point --referencePoint center --missingDataAsZero --upstream 5000 --downstream 5000 -p 10 -R IDR/intersections_H3K27acxH2BK120/intersections_TSS_intergenic_splitted/H4KO.ExclusivePeaks.H3K27ac.onlyGeneBody.bed IDR/intersections_H3K27acxH2BK120/intersections_TSS_intergenic_splitted/H4KO.ExclusivePeaks.H2BK120ac.onlyGeneBody.bed IDR/intersections_H3K27acxH2BK120/intersections_TSS_intergenic_splitted/H4KO.CommonPeaks.onlyGeneBody.btmerged.bed -S /media/alessio/Data/hypoxia/ChIPseq/samples/H3K27AC/K125A1/K125A1_RPKM.bw  /media/alessio/Data/hypoxia/ChIPseq/samples/H3K27AC/K26A1/K26A1_RPKM.bw /media/alessio/Data/hypoxia/ChIPseq/samples/H2BK120AC/K125B1/K125B1_RPKM.bw  /media/alessio/Data/hypoxia/ChIPseq/samples/H2BK120AC/K26B1/K26B1_RPKM.bw -o /media/alessio/Data/hypoxia/ChIPseq/IDR/intersections_H3K27acxH2BK120/Normoxia_H4KO_H3K27ac_x_H2BK120ac_intersections_onlyGeneBody.gz --smartLabels
+```
+
+```{bash}
+#TSS
+plotProfile -m /media/alessio/Data/hypoxia/ChIPseq/IDR/intersections_H3K27acxH2BK120/Normoxia_Cas9_H3K27ac_x_H2BK120ac_intersections_onlyTSS.gz -out Normoxia_Cas9_H3K27ac_x_H2BK120ac_intersections_onlyTSS.pdf --numPlotsPerRow 3 --plotTitle "Normoxia Cas9 H3K27ac x H2BK120ac intersections" --perGroup --plotHeight 10 --plotWidth 15 --colors "#32004F" "#7323A8" "#69B437" "#91DA73" --plotFileFormat "pdf"
+
+plotProfile -m /media/alessio/Data/hypoxia/ChIPseq/IDR/intersections_H3K27acxH2BK120/Normoxia_H4KO_H3K27ac_x_H2BK120ac_intersections_onlyTSS.gz -out Normoxia_H4KO_H3K27ac_x_H2BK120ac_intersections_onlyTSS.pdf --numPlotsPerRow 3 --plotTitle "Normoxia H4KO H3K27ac x H2BK120ac intersections" --perGroup --plotHeight 10 --plotWidth 15 --colors "#F31365" "#C3122F" "#165A54" "#0E3338" --plotFileFormat "pdf"
+
+#Distal Intergenic
+plotProfile -m /media/alessio/Data/hypoxia/ChIPseq/IDR/intersections_H3K27acxH2BK120/Normoxia_Cas9_H3K27ac_x_H2BK120ac_intersections_onlyIntergenic.gz -out Normoxia_Cas9_H3K27ac_x_H2BK120ac_intersections_onlyIntergenic.pdf --numPlotsPerRow 3 --plotTitle "Normoxia Cas9 H3K27ac x H2BK120ac intersections" --perGroup --plotHeight 10 --plotWidth 15 --colors "#32004F" "#7323A8" "#69B437" "#91DA73" --plotFileFormat "pdf"
+
+plotProfile -m /media/alessio/Data/hypoxia/ChIPseq/IDR/intersections_H3K27acxH2BK120/Normoxia_H4KO_H3K27ac_x_H2BK120ac_intersections_onlyIntergenic.gz -out Normoxia_H4KO_H3K27ac_x_H2BK120ac_intersections_onlyIntergenic.pdf --numPlotsPerRow 3 --plotTitle "Normoxia H4KO H3K27ac x H2BK120ac intersections" --perGroup --plotHeight 10 --plotWidth 15 --colors "#F31365" "#C3122F" "#165A54" "#0E3338" --plotFileFormat "pdf"
+
+#Gene Body
+plotProfile -m /media/alessio/Data/hypoxia/ChIPseq/IDR/intersections_H3K27acxH2BK120/Normoxia_Cas9_H3K27ac_x_H2BK120ac_intersections_onlyGeneBody.gz -out Normoxia_Cas9_H3K27ac_x_H2BK120ac_intersections_onlyGeneBody.pdf --numPlotsPerRow 3 --plotTitle "Normoxia Cas9 H3K27ac x H2BK120ac intersections" --perGroup --plotHeight 10 --plotWidth 15 --colors "#32004F" "#7323A8" "#69B437" "#91DA73" --plotFileFormat "pdf"
+
+plotProfile -m /media/alessio/Data/hypoxia/ChIPseq/IDR/intersections_H3K27acxH2BK120/Normoxia_H4KO_H3K27ac_x_H2BK120ac_intersections_onlyGeneBody.gz -out Normoxia_H4KO_H3K27ac_x_H2BK120ac_intersections_onlyGeneBody.pdf --numPlotsPerRow 3 --plotTitle "Normoxia H4KO H3K27ac x H2BK120ac intersections" --perGroup --plotHeight 10 --plotWidth 15 --colors "#F31365" "#C3122F" "#165A54" "#0E3338" --plotFileFormat "pdf"
+```
+
+
+#.#########################################
+#HIF1a (Hutsmc) overlap peaks su picchi IDR
+#.#########################################
+
+```{r}
+Peaks.IDR.H3K27ac
+Peaks.IDR.H2BK120ac
+```
+
+#carico il narrowPeak di HIF-1a sulle HutSMC
+```{r}
+HIF1a_Hut <- readPeakFile("/media/alessio/Data/hypoxia/HIF1A_datasets/PRJNA809308/macs3_peaks/SRR18097068_macs3_peaks.narrowPeak") %>% 
+  sortSeqlevels(.)
+```
+
+```{r}
+for (i in names(Peaks.IDR.H3K27ac)) {
+  #png(str_c("plot/Overlaps_DiffBind_results_HiF1a_Hutsmc/",i,".png"))
+  Venn <- makeVennDiagram(Peaks = list(Peaks.IDR.H3K27ac[[i]], HIF1a_Hut),
+                  NameOfPeaks = c(i, "HIF1a_Hut"),
+                  fill = c("darkred", "white"),
+                  margin=0.2, 
+                  disable.logging = T,
+                  connectedPeaks = "keepAll")
+  
+  #dev.off()
+}
+
+for (i in names(Peaks.IDR.H2BK120ac)) {
+  #png(str_c("plot/Overlaps_DiffBind_results_HiF1a_Hutsmc/",i,".png"))
+  Venn <- makeVennDiagram(Peaks = list(Peaks.IDR.H2BK120ac[[i]], HIF1a_Hut),
+                  NameOfPeaks = c(i, "HIF1a_Hut"),
+                  fill = c("darkgreen", "white"),
+                  margin=0.2, 
+                  disable.logging = T,
+                  connectedPeaks = "keepAll")
+  
+  #dev.off()
+}
+```
+
