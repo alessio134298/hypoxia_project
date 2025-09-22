@@ -1,0 +1,461 @@
+```{r setup, echo = F}
+library(tidyverse)
+library(DESeq2)
+library(clusterProfiler)
+library(tximeta)
+library(AnnotationHub)
+library(msigdbr)
+library(enrichplot)
+library(ggpubr)
+
+
+#Genes object
+ah <- AnnotationHub(localHub = FALSE)
+query(ah , c("Homo sapiens", "Ensembl","EnsDb", "110"))
+edb <- ah[["AH113665"]]
+gns <- as.data.frame(genes(edb, return.type = "DataFrame")) 
+rm(edb, ah)
+
+gns_geneidversion_symbol_entrexid <- gns %>% 
+  dplyr::select(gene_id_version, symbol, entrezid)
+```
+
+#Lettura coldata
+```{r}
+coldata <- read_csv("Experiment_oldcl26.csv")
+```
+
+#TXIMETA
+```{r, echo = F}
+#tximeta import
+Hypoxia_se <- tximeta(coldata = coldata)
+
+#summarize to gene
+Hypoxia_se_summarized_to_genes <- summarizeToGene(Hypoxia_se)
+
+#rowRanges(Hypoxia_se_summarized_to_genes)
+```
+
+#DESEQ2
+```{r}
+dds <- DESeqDataSet(Hypoxia_se_summarized_to_genes, design = ~ type_time)
+
+dds <- DESeq(dds)
+```
+
+#TRASFORM
+```{r}
+vsd <- vst(dds,  blind=FALSE)
+```
+
+#PCA
+```{r}
+pcaData <- plotPCA(vsd, intgroup =c("clone", "time"), returnData = T)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+PCA_allsamples <- ggplot(pcaData, aes(PC1, PC2, fill = clone, shape = time)) +
+  geom_point(size = 5) +
+  scale_shape_manual(values = c(21L, 22L, 23L, 24L)) +
+  scale_fill_manual(values = c("#854ddc", "#FF007F", "#FF007F")) +
+ # geom_text(aes(label = group), size = 3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  guides(fill = guide_legend(override.aes = list(shape=21))) +
+  coord_fixed() +
+  theme_bw()
+
+PCA_allsamples
+
+# PCA_cl26 <- ggplot(pcaData, aes(PC1, PC2, shape = type_time)) +
+#   geom_point(size = 5, fill = "#619CFF") +
+#   scale_shape_manual(values = c(21L, 22L, 23L, 24L)) +
+#   xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+#   ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+#   labs(shape = "HDAC4 -/- cl.26") +
+#   coord_fixed() +
+#   theme_bw() #per fare questo ho modificato coldata e il design
+# 
+# PCA_cl26
+# 
+# PCA_cl125 <- ggplot(pcaData, aes(PC1, PC2, shape = type_time)) +
+#   geom_point(size = 5, fill = "#00BA38") +
+#   scale_shape_manual(values = c(21L, 22L, 23L, 24L)) +
+#   xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+#   ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+#   labs(shape = "HDAC4 -/- cl.125") +
+#   coord_fixed() +
+#   theme_bw() #per fare questo ho modificato coldata e il design
+# 
+# PCA_cl125
+# 
+# PCA_Cas9 <- ggplot(pcaData, aes(PC1, PC2, shape = type_time)) +
+#   geom_point(size = 5, fill = "#F8766D") +
+#   scale_shape_manual(values = c(21L, 22L, 23L, 24L)) +
+#   xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+#   ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+#   labs(shape = "Cas9") +
+#   coord_fixed() +
+#   theme_bw() #per fare questo ho modificato coldata e il design
+# 
+# PCA_Cas9
+# 
+# PCA_H4KO_clones <-  ggplot(pcaData, aes(PC1, PC2, fill = clone, shape = time)) +
+#   geom_point(size = 5) +
+#   scale_shape_manual(values = c(21L, 22L, 23L, 24L)) +
+#   scale_fill_manual(values = c("#00BA38", "#619CFF")) +
+#   xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+#   ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+#   guides(fill = guide_legend(override.aes = list(shape=21))) +
+#   coord_fixed() +
+#   theme_bw() #per fare questo ho modificato coldata e il design
+# 
+# PCA_H4KO_clones
+```
+
+#Salvo PCA
+```{r}
+ggsave(PCA_allsamples, filename = "plot/PCA_all_samples.pdf", dpi = 300, height = 6, width = 8)
+ggsave(PCA_cl26, filename = "plot/PCA_H4KO_cl26.png", dpi = 300, height = 6, width = 8)
+ggsave(PCA_cl125, filename = "plot/PCA_H4KO_cl125.png", dpi = 300, height = 6, width = 8)
+ggsave(PCA_Cas9, filename = "plot/PCA_Cas9.png", dpi = 300, height = 6, width = 8)
+ggsave(PCA_H4KO_clones, filename = "plot/PCA_H4KO_clones.png", dpi = 300, height = 6, width = 8)
+```
+
+#SAMPLE DISTANCES
+```{r}
+library("RColorBrewer")
+library("pheatmap")
+
+samplesDist <- dist(t(assay(vsd)), method = "euclidean")
+sampleDistMatrix <- as.matrix(samplesDist)
+rownames(sampleDistMatrix) <- vsd$clone_time
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=samplesDist,
+         clustering_distance_cols=samplesDist,
+         col=colors)
+```
+
+#Salvo matrici
+```{r}
+#Raw Counts
+NO_norm_Counts <- DESeq2::counts(object = dds, normalized = F) %>% as.data.frame() %>% rownames_to_column("gene_id_version")
+#Norm counts
+Norm_counts <- DESeq2::counts(object = dds, normalized = T) %>% as.data.frame() %>% rownames_to_column("gene_id_version")
+#TPM (No norm)
+TPM <- assay(dds, "abundance") %>% as.data.frame() %>% rownames_to_column("gene_id_version")
+#VSD
+VSD <- assay(vsd) %>% as.data.frame() %>% rownames_to_column("gene_id_version")
+
+write_delim(NO_norm_Counts, file = "Count_Tabs/DESeq2_NO_norm_counts.csv", delim = ",")
+write_delim(Norm_counts, file = "Count_Tabs/DESeq2_norm_counts.csv", delim = ",")
+write_delim(TPM, file = "Count_Tabs/TPM.csv", delim = ",")
+write_delim(VSD, file = "Count_Tabs/DESeq2_VSD.csv", delim = ",")
+```
+
+
+
+######################
+#Analisi differenziale
+######################
+
+```{r}
+DESEq2_results <- list(H4KO_vs_Cas9_0h = results(dds, contrast = c("type_time", "H4KO_0h", "Cas9_0h")),
+                H4KO_vs_Cas9_6h = results(dds, contrast = c("type_time", "H4KO_6h", "Cas9_6h")),
+                H4KO_vs_Cas9_24h = results(dds, contrast = c("type_time", "H4KO_24h", "Cas9_24h")),
+                H4KO_vs_Cas9_48h = results(dds, contrast = c("type_time", "H4KO_48h", "Cas9_48h")),
+                Vs_normoxia_Cas9_6h = results(dds, contrast = c("type_time", "Cas9_6h", "Cas9_0h")),
+                Vs_normoxia_Cas9_24h = results(dds, contrast = c("type_time", "Cas9_24h", "Cas9_0h")),
+                Vs_normoxia_Cas9_48h = results(dds, contrast = c("type_time", "Cas9_48h", "Cas9_0h")),
+                Vs_normoxia_H4KO_6h = results(dds, contrast = c("type_time", "H4KO_6h", "H4KO_0h")),
+                Vs_normoxia_H4KO_24h = results(dds, contrast = c("type_time", "H4KO_24h", "H4KO_0h")),
+                Vs_normoxia_H4KO_48h = results(dds, contrast = c("type_time", "H4KO_48h", "H4KO_0h"))
+) %>%
+  enframe(name = "Comparison", #nested
+          value = "Results") %>% 
+  dplyr::mutate(Results = map(Results, \(x) as.data.frame(x) %>% 
+                                dplyr::mutate(Dexpr = case_when(
+                                  (log2FoldChange > 0.75 & padj < 0.05) ~ "UP",
+                                  (log2FoldChange < -0.75 & padj < 0.05) ~ "DOWN",
+                                  TRUE ~ "ns"
+                                )
+                                ) %>%
+                                rownames_to_column("gene_id_version") %>% 
+                                left_join(gns_geneidversion_symbol_entrexid, by = "gene_id_version")
+                                
+  )
+  )
+```
+
+#Salvo risultati come file excel
+```{r}
+DESEq2_results %>% 
+  dplyr::filter(str_detect(Comparison, "H4KO_vs_Cas9")) %>%
+  dplyr::mutate(Results = map(Results, \(x) dplyr::select(x, -entrezid))) %>% 
+  deframe() %>% 
+  openxlsx::write.xlsx(., file = "Tab_files/DESeq2_Results_H4KO_vs_Cas9.xlsx")
+
+DESEq2_results %>% 
+  dplyr::filter(str_detect(Comparison, "Vs_normoxia")) %>%
+  dplyr::mutate(Results = map(Results, \(x) dplyr::select(x, -entrezid))) %>% 
+  deframe() %>% 
+  openxlsx::write.xlsx(., file = "Tab_files/DESeq2_Results_Vs_normoxia.xlsx")
+```
+
+#Summary dei risultati
+```{r}
+Summary_Dexpr <- DESEq2_results %>% 
+  dplyr::mutate(Count_Dexpr = map(Results, \(x) x %>% 
+                                    group_by(Dexpr) %>% 
+                                    summarize(Count = n()) %>% 
+                                    dplyr::filter(Dexpr != "ns"))
+  ) %>% 
+  dplyr::select(!Results) %>% 
+  unnest(Count_Dexpr)
+```
+
+#Barplot dei Degs
+```{r}
+#Vs normoxia
+Vs_normoxia_Dexpr_Col_plot <- Summary_Dexpr %>% 
+  dplyr::filter(str_detect(Comparison, "Vs_normoxia")) %>%
+  dplyr::mutate(Count = ifelse(Dexpr == "UP", Count, -Count)) %>% 
+  dplyr::mutate(Comparison = fct_relevel(Comparison, c("Vs_normoxia_Cas9_6h", "Vs_normoxia_Cas9_24h", "Vs_normoxia_Cas9_48h",
+                                                       "Vs_normoxia_H4KO_6h", "Vs_normoxia_H4KO_24h", "Vs_normoxia_H4KO_48h"))
+                ) %>% 
+  dplyr::mutate(line = ifelse(str_detect(Comparison, "Cas9"), "Cas9", "H4KO")) %>% 
+  ggplot(aes(x = Comparison, y = Count, fill = Dexpr)) +
+  geom_col(color = "black", width = 0.5) +
+  scale_fill_manual(values = c("UP" = "#eb1719", "DOWN" = "#4baae8")) +
+  geom_text(aes(x = Comparison, 
+                y = ifelse(Dexpr == "UP", Count + 200, Count -200),
+                label = ifelse(Dexpr == "UP", Count, -Count))) +
+  facet_wrap(~ line, scales = "free_x") +
+  theme_bw() +
+  labs(x = NULL,
+       y = NULL) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.text.y=element_blank())
+
+#H4KO vs Cas9
+H4KO_vs_Cas9_Dexpr_Col_plot <- Summary_Dexpr %>% 
+  dplyr::filter(str_detect(Comparison, "Vs_normoxia", negate = T)) %>%
+  dplyr::mutate(Count = ifelse(Dexpr == "UP", Count, -Count)) %>% 
+  dplyr::mutate(Comparison = fct_relevel(Comparison, c("H4KO_vs_Cas9_0h", "H4KO_vs_Cas9_6h", "H4KO_vs_Cas9_24h", "H4KO_vs_Cas9_48h"))
+                ) %>% 
+  dplyr::mutate(line = ifelse(str_detect(Comparison, "Cas9"), "Cas9", "H4KO")) %>% 
+  ggplot(aes(x = Comparison, y = Count, fill = Dexpr)) +
+  geom_col(color = "black", width = 0.5) +
+  scale_fill_manual(values = c("UP" = "#eb1719", "DOWN" = "#4baae8")) +
+  geom_text(aes(x = Comparison, 
+                y = ifelse(Dexpr == "UP", Count + 200, Count -200),
+                label = ifelse(Dexpr == "UP", Count, -Count))) +
+  theme_bw() +
+  labs(x = NULL,
+       y = NULL) +
+  theme(axis.text.x=element_blank()) +
+  coord_flip()
+
+Vs_normoxia_Dexpr_Col_plot
+H4KO_vs_Cas9_Dexpr_Col_plot
+```
+
+#Salvo plot
+```{r}
+ggsave(Vs_normoxia_Dexpr_Col_plot, file = "plot/Vs_normoxia_Dexpr_Col_plot.png", dpi = 300, height = 6, width = 8)
+ggsave(H4KO_vs_Cas9_Dexpr_Col_plot, file = "plot/H4KO_vs_Cas9_Dexpr_Col_plot.png", dpi = 300, height = 4, width = 8)
+```
+
+#VolcanoPlot
+```{r}
+Volcanoplot <- function(df, title) {
+  
+  df %>% 
+    ggplot(aes(x = log2FoldChange, y = -log10(pvalue), color = Dexpr)) +
+    geom_point(alpha = 0.7) +
+    scale_color_manual(values = c("UP" = "red", "DOWN" = "blue", "ns" = "black")) +
+    annotate(geom = "label", 
+              hjust = "left",
+             vjust = 3,
+          x = c(-8, 6), y = c(Inf,Inf),
+             label = (dplyr::filter(df,
+             Dexpr %in% c("UP", "DOWN")) %>% 
+             dplyr::count(Dexpr) |> pull(n))) +
+    labs(title = title,
+         color = NULL) +
+    lims(x = c(-20, 20)) +
+    theme_bw()
+}
+
+#applico funzione Volcano plot su ogni riga del nested dataframe
+apply(DESEq2_results, MARGIN = 1, function(row) Volcanoplot(row[["Results"]], row[["Comparison"]]))
+```
+
+
+
+
+##########################
+#PATHWAY ENRICHMENT (plot)
+##########################
+
+#Preparo il dataframe per le analisi di enrichment successive
+```{r}
+#Estraggo Upregolati e Downregolati tenendo solo gli entrezid
+DESEq2_results_Extrcted_Degs <- DESEq2_results %>% 
+  dplyr::mutate(Upreg = map(Results, \(x) dplyr::filter(x, Dexpr == "UP") %>% 
+                  dplyr::select(entrezid) %>% unlist()),
+                Downreg = map(Results, \(x) dplyr::filter(x, Dexpr == "DOWN") %>% 
+                  dplyr::select(entrezid) %>% unlist())) %>% 
+  dplyr::select(!Results)
+
+DESEq2_results_Extrcted_Degs
+```
+
+```{r}
+#Gene Ontology enrichment su Up e Down symbol
+Gene_ontology_enrichment <- DESEq2_results_Extrcted_Degs %>% 
+  pivot_longer(cols = c("Upreg", "Downreg"), names_to = "Up_or_Down", values_to = "Degs_symbol") %>% 
+  dplyr::mutate(GO_BP_enrichment = map(Degs_symbol, \(x) enrichGO(x,
+                                                                  keyType = "ENTREZID",
+                                                                  ont = "BP",
+                                                                  OrgDb = 'org.Hs.eg.db')))
+
+#Plot
+apply(Gene_ontology_enrichment, MARGIN = 1, function(row) 
+  dotplot(object = row[[4]], showCategory = 20,  title = str_c("GO:BP_",row[[2]],"_",row[[1]])) %>%  
+  ggsave(., filename = str_c("plot/GO_BP_enrichment/","GO:BP_",row[[2]],"_",row[[1]],".png"), height = 10, width = 8, dpi = 300)
+)
+
+#KEGG enrichment
+KEGG_enrichment <- DESEq2_results_Extrcted_Degs %>% 
+  pivot_longer(cols = c("Upreg", "Downreg"), names_to = "Up_or_Down", values_to = "Degs_symbol") %>% 
+  dplyr::mutate(KEGG_enrichment = map(Degs_symbol, \(x) enrichKEGG(x,
+                                                                  organism = "hsa")))
+
+#PLot
+apply(KEGG_enrichment, MARGIN = 1, function(row) 
+  tryCatch( expr = {
+    dotplot(object = row[[4]], showCategory = 20,  title = str_c("KEGG_",row[[2]],"_",row[[1]])) %>% 
+      ggsave(., filename = str_c("plot/KEGG_enrichment/","KEGG_",row[[2]],"_",row[[1]],".png"), height = 10, width = 8, dpi = 300)
+    }, 
+    error = function(e){
+            message('Caught an error!')
+            print(e)
+            }
+    )
+)
+```
+
+
+#################################
+#MSIGDB ENRICHMENT (liste excel)
+#################################
+
+```{r}
+#creo lista di annotazioni
+sig_names <- c("GO:BP", "GO:CC", "GO:MF", "HPO", "KEGG", "REACTOME", "WIKIPATHWAYS")
+Msigdbr_signture_lists <- list()
+
+for (i in 1:length(sig_names)) {
+msigdb_df <- msigdbr(species = "Homo sapiens", subcategory = sig_names[[i]]) %>% 
+  dplyr::select(gs_name, human_entrez_gene) #gene symbol serve per la GSEA dopo
+name = sig_names[[i]]
+Msigdbr_signture_lists[[name]] <- msigdb_df
+rm(msigdb_df)
+}
+
+#aggiungo questa a mano perchè non era nelle subcategories
+Msigdbr_signture_lists[["HALLMARKS"]] <- msigdbr(species = "Homo sapiens", category = "H") %>% 
+  dplyr::select(gs_name, human_entrez_gene)
+
+
+#funzione per creare la lista con gli enrichment
+Return_enrich_list <- function(genes, msigdb_list) {
+  enrich_list <- list()
+  for (i in names(msigdb_list)) {
+    enrichment <- enricher(gene = genes,
+                            TERM2GENE = msigdb_list[[i]], #elimino la colonna con i gene symbol
+                            pAdjustMethod = "BH"
+    )
+    name = str_replace(i, ":", "_")
+    enrich_list[[name]] <- enrichment
+    # names(enrich_list)[[i]] <- gsub(":", "_", names(msigdb_list)[[i]])
+  }
+  return(enrich_list)
+}
+
+#Applico funzione con map
+Msigdb_enrichment <- DESEq2_results_Extrcted_Degs %>% 
+  pivot_longer(cols = c("Upreg", "Downreg"), names_to = "Up_or_Down", values_to = "Degs_symbol") %>% 
+  dplyr::mutate(Msigdb_enrichment = map(Degs_symbol, function(x) {
+                                        #print(x)
+                                        Return_enrich_list(x, Msigdbr_signture_lists)  
+                                        })
+                )
+```
+
+#Salvo
+```{r}
+apply(Msigdb_enrichment, MARGIN = 1, function(row) 
+  openxlsx::write.xlsx(x = row[["Msigdb_enrichment"]], file = str_c("Tab_files/Msigdb/",row[["Up_or_Down"]],"_",row[["Comparison"]],".xlsx"))
+  )
+```
+
+
+############################
+#GSEA su tutti gli HALLMARKS
+############################
+
+```{r}
+#Creo dentro al dataframe le genelist ranked
+DESEq2_results_for_GSEA <- DESEq2_results %>% 
+  dplyr::mutate(Ranked_genelist = map(Results, \(x) dplyr::select(x, c(entrezid,log2FoldChange)) %>% 
+                                        dplyr::filter(!is.na(entrezid) & entrezid != "") %>%
+                                        dplyr::distinct(entrezid, .keep_all = T) %>% 
+                                        dplyr::arrange(desc(log2FoldChange)) %>% 
+                                        deframe()  #passa da un dataframe a un vettore con nome
+                                        )
+  ) %>% 
+  dplyr::select(!Results)
+
+#GSEA
+DESEq2_results_for_GSEA <- DESEq2_results_for_GSEA %>% 
+  dplyr::mutate(GSEA_hallmarks = map(Ranked_genelist, \(x) GSEA(geneList = x[!is.na(x)], #elimino gli NA se no da errore
+                                                                TERM2GENE = Msigdbr_signture_lists[["HALLMARKS"]])
+                                     )
+                )
+```
+
+#plot dei risultati GSEA
+```{r}
+#funzione per fare i plot iterando su ogni elemento della lista msigdb, su ogni category
+PlotGSEA <- function(GSEAobj, Comparison) {
+  for (i in unique(Msigdbr_signture_lists[["HALLMARKS"]][["gs_name"]])) {
+    Plot <- gseaplot2(x = GSEAobj, geneSetID = i, subplots = 1:2, title = i)
+    ggsave(plot = Plot, filename = str_c("plot/GSEA_hallmarks/",Comparison,"/",i,".png"), dpi = 300, height = 6, width = 8)
+  }
+}
+
+#applico funzione per fare gsea plot e salva
+apply(DESEq2_results_for_GSEA, MARGIN = 1, function(row)
+  PlotGSEA(row[["GSEA_hallmarks"]], row[["Comparison"]])
+  )
+
+# DESEq2_results_for_GSEA %>%
+#   purrr::pmap(function(GSEA_hallmarks, Comparison) {
+#     PlotGSEA(GSEAobj = GSEA_hallmarks, Comparison = Comparison)
+#   })
+```
+
+
+
+
+
+
+
+
+
+
+
+

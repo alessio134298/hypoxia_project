@@ -1,0 +1,173 @@
+```{r setup, echo = F}
+library(tidyverse)
+library(DESeq2)
+library(clusterProfiler)
+library(tximeta)
+library(AnnotationHub)
+library(msigdbr)
+library(enrichplot)
+library(ggpubr)
+
+
+#Genes object
+ah <- AnnotationHub(localHub = FALSE)
+query(ah , c("Homo sapiens", "Ensembl","EnsDb", "110"))
+edb <- ah[["AH113665"]]
+gns <- as.data.frame(genes(edb, return.type = "DataFrame")) 
+rm(edb, ah)
+
+gns_geneidversion_symbol_entrexid <- gns %>% 
+  dplyr::select(gene_id_version, symbol, entrezid)
+```
+
+#Lettura coldata e aggiungo i campioni vecchi che ho riallineato con salmon
+```{r}
+coldata <- read_csv("Experiment.csv") %>% 
+  dplyr::mutate(Myco = "No")
+
+cl26_old <- list.files("/media/alessio/Data/hypoxia/RNAseq/Rawfastq_nuovo/old_H4KO_cl26/salmon_quant", full.names = T)
+cl26_old_quant_sf <- paste0(cl26_old,"/salmon_quant/quant.sf")
+
+coldata_cl26_old <- tibble(names = basename(cl26_old),
+                           files = cl26_old_quant_sf, 
+                           clone = "H4KO_cl26",
+                           type = "H4KO",
+                           time = rep(c("24h", "48h", "6h", "0h"), 2),
+                           clone_time = str_c(clone, time, sep = "_"),
+                           type_time = str_c(type, time, sep = "_"),
+                           batch = 1,
+                           Group_time = str_c(clone, time, sep = "_"),
+                           Myco = "Yes")
+
+coldata_total = bind_rows(coldata, coldata_cl26_old)
+```
+
+#TXIMETA
+```{r, echo = F}
+#tximeta import
+Hypoxia_se <- tximeta(coldata = coldata_total)
+
+#summarize to gene
+Hypoxia_se_summarized_to_genes <- summarizeToGene(Hypoxia_se)
+
+#rowRanges(Hypoxia_se_summarized_to_genes)
+
+#DESEQ2
+dds <- DESeqDataSet(Hypoxia_se_summarized_to_genes, design = ~ Myco + Group_time)
+
+dds <- DESeq(dds)
+
+
+#TRASFORM & PCA
+vsd <- vst(dds,  blind=FALSE)
+
+pcaData <- plotPCA(vsd, intgroup =c("Myco", "clone"), returnData = T)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+PCA_allsamples <- ggplot(pcaData, aes(PC1, PC2, fill = Myco, shape = clone)) +
+  geom_point(size = 5) +
+  scale_shape_manual(values = c(21L, 22L, 23L, 24L)) +
+  scale_fill_manual(values = c("#854ddc", "#FF007F", "#FF007F")) +
+ # geom_text(aes(label = group), size = 3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  guides(fill = guide_legend(override.aes = list(shape=21))) +
+  coord_fixed() +
+  theme_bw()
+
+PCA_allsamples
+```
+
+
+#######################
+#Analisi HDAC4 -/- cl26
+#######################
+
+```{r}
+coldata_H4KO_cl26 <- coldata_total %>% 
+  dplyr::filter(clone == "H4KO_cl26") %>% 
+  dplyr::mutate(Group_time_myco = str_c(Group_time, Myco, sep = "_"))
+
+#TXIMETA
+#tximeta import
+Hypoxia_se <- tximeta(coldata = coldata_H4KO_cl26)
+
+#summarize to gene
+Hypoxia_se_summarized_to_genes <- summarizeToGene(Hypoxia_se)
+
+#rowRanges(Hypoxia_se_summarized_to_genes)
+
+
+#DESEQ2
+dds <- DESeqDataSet(Hypoxia_se_summarized_to_genes, design = ~ Group_time_myco)
+
+dds <- DESeq(dds)
+```
+
+#PCA
+```{r}
+vsd <- vst(dds,  blind=FALSE)
+
+pcaData <- plotPCA(vsd, intgroup =c("Myco", "time"), returnData = T)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+PCA_cl26 <- ggplot(pcaData, aes(PC1, PC2, fill = Myco, shape = time)) +
+  geom_point(size = 5) +
+  scale_shape_manual(values = c(21L, 22L, 23L, 24L)) +
+  scale_fill_manual(values = c("green", "red")) +
+ # geom_text(aes(label = group), size = 3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  guides(fill = guide_legend(override.aes = list(shape=21))) +
+  coord_fixed() +
+  theme_bw()
+
+PCA_cl26
+```
+
+#Results solo normossia
+```{r}
+H4KO_cl26_normoxia_myco <- results(dds, contrast = c("Group_time_myco", "H4KO_cl26_0h_Yes", "H4KO_cl26_0h_No")) %>% 
+  as.data.frame() %>% 
+  dplyr::mutate(Dexpr = case_when(
+    log2FoldChange > 0.75 & padj < 0.05 ~ "UP",
+    log2FoldChange < -0.75 & padj < 0.05 ~ "DOWN",
+    TRUE ~ "ns"
+  )
+  ) %>% 
+  rownames_to_column("gene_id_version") %>% 
+  left_join(y = gns_geneidversion_symbol_entrexid, by = "gene_id_version")
+
+H4KO_cl26_normoxia_myco %>% 
+  group_by(Dexpr) %>% 
+  summarize(Count = n())
+
+#UP
+UP_H4KO_cl26_normoxia_myco <- H4KO_cl26_normoxia_myco %>% 
+  dplyr::filter(Dexpr == "UP")
+
+#DOWN
+DOWN_H4KO_cl26_normoxia_myco <- H4KO_cl26_normoxia_myco %>% 
+  dplyr::filter(Dexpr == "DOWN")
+```
+
+#GO
+```{r}
+Up_GO_cl26_normoxia_myco <- enrichGO(gene = UP_H4KO_cl26_normoxia_myco$entrezid,
+                                     ont = "BP",
+                                     keyType = "ENTREZID",
+                                     OrgDb = "org.Hs.eg.db"
+)
+
+
+
+Down_GO_cl26_normoxia_myco <- enrichGO(gene = DOWN_H4KO_cl26_normoxia_myco$entrezid,
+                                     ont = "BP",
+                                     keyType = "ENTREZID",
+                                     OrgDb = "org.Hs.eg.db"
+)
+
+dotplot(Up_GO_cl26_normoxia_myco, showCategory = 15, title = "Upregulated pathways H4KO cl26 old vs new")
+dotplot(Down_GO_cl26_normoxia_myco, showCategory = 15, title = "Downregulated pathways H4KO cl26 old vs new")
+```
+

@@ -1,0 +1,369 @@
+```{r setup, echo = F}
+library(tidyverse)
+library(clusterProfiler)
+library(AnnotationHub)
+library(msigdbr)
+library(enrichplot)
+library(ggpubr)
+
+
+#Genes object
+ah <- AnnotationHub(localHub = FALSE)
+query(ah , c("Homo sapiens", "Ensembl","EnsDb", "110"))
+edb <- ah[["AH113665"]]
+gns <- as.data.frame(genes(edb, return.type = "DataFrame")) 
+rm(edb, ah)
+
+gns_geneidversion_symbol_entrexid <- gns %>% 
+  dplyr::select(gene_id_version, symbol, entrezid)
+```
+
+
+###################################
+#Plot conte normalizzate , VSD, TPM
+###################################
+
+```{r}
+coldata <- read_csv("Experiment_oldcl26.csv")
+
+gns_geneidversion_symbol <- gns %>% 
+  dplyr::select(gene_id_version, symbol)
+
+Make_long_df <- function(file) {
+  df <- read_csv(file) %>% 
+  left_join(gns_geneidversion_symbol, by = "gene_id_version") %>% 
+  pivot_longer(cols = starts_with("R"), names_to = "names", values_to = "counts") %>% #pivot longer
+  left_join(coldata[,c("names","clone_time", "clone", "type", "time", "type_time")], by = "names") %>% 
+  dplyr::select(names, clone, type, time, clone_time, type_time, symbol, counts)
+}
+
+#Conte normalizzate
+TPM_long <- Make_long_df("Count_Tabs/TPM.csv")
+#VSD
+VSD_Counts_long <- Make_long_df("Count_Tabs/DESeq2_VSD.csv") 
+#TPM
+Norm_counts_long <- Make_long_df("Count_Tabs/DESeq2_norm_counts.csv")
+```
+
+```{r}
+#Funzione per creare il plot
+Plot_counts_signature <- function(df, signature) {
+  
+  df %>%
+    dplyr::mutate(time = fct_relevel(time, c("0h", "6h", "24h", "48h"))) %>%
+    dplyr::filter(symbol %in% signature) %>%
+    ggplot(aes(x = type, y = counts, fill = type)) +
+    geom_boxplot() +
+    labs(title = deparse(substitute(signature)),
+         y = "VSD counts",
+         x = NULL) +
+    scale_fill_manual(values = c("#854ddc", "#FF007F")) +
+    stat_compare_means(method = "wilcox.test",
+                       comparisons = list(c("Cas9", "H4KO")),
+                       na.rm = T,
+                       paired = T) +
+    facet_grid(~ time, scales = "free_x") +
+    theme_bw()
+}
+
+
+#Funzione per creare il plot solo Cas9
+Plot_counts_signature_only_Cas9 <- function(df, signature) {
+  
+  # mean_diff <- with(df, tapply(counts, time, mean)["24h"] - tapply(counts, time, mean)["0h"])
+  # 
+  # print(mean_diff)
+  
+  df %>%
+    dplyr::filter(type == "Cas9") %>% 
+    dplyr::mutate(time = fct_relevel(time, c("0h", "6h", "24h", "48h"))) %>%
+    dplyr::filter(symbol %in% signature) %>%
+    ggplot(aes(x = time, y = counts)) +
+    geom_boxplot(fill = "#854ddc") +
+    labs(title = deparse(substitute(signature)),
+         y = "VSD counts",
+         x = NULL) +
+    stat_compare_means(method = "wilcox.test",
+                       comparisons = list(c("0h", "6h"),
+                                          c("24h", "0h"),
+                                          c("48h", "0h")),
+                       na.rm = T,
+                       paired = F) +
+    theme_bw()
+}
+```
+
+#Hallmarks Hypoxia
+```{r}
+HALLMARKS_HYPOXIA <- msigdbr(species = "Homo sapiens", category = "H") %>% 
+  dplyr::filter(gs_name == "HALLMARK_HYPOXIA") %>% 
+  dplyr::select(gene_symbol) %>% unlist() %>% unique()
+
+Plot_counts_signature(VSD_Counts_long, HALLMARKS_HYPOXIA)
+```
+
+#Hallmarks Interferon alpha
+```{r}
+HALLMARKS_IF_A <- msigdbr(species = "Homo sapiens", category = "H") %>% 
+  dplyr::filter(gs_name == "HALLMARK_INTERFERON_ALPHA_RESPONSE") %>% 
+  dplyr::select(gene_symbol) %>% unlist() %>% unique()
+
+Plot_counts_signature(VSD_Counts_long, HALLMARKS_IF_A) %>% 
+  ggsave(., filename = "plot/Interferon_A_boxplot_VSD.png", dpi = 300, height = 6, width = 8)
+```
+
+#Ineterferon gamma
+```{r}
+HALLMARKS_IF_G <- msigdbr(species = "Homo sapiens", category = "H") %>% 
+  dplyr::filter(gs_name == "HALLMARK_INTERFERON_GAMMA_RESPONSE") %>% 
+  dplyr::select(gene_symbol) %>% unlist() %>% unique()
+
+Plot_counts_signature(VSD_Counts_long, HALLMARKS_IF_G)
+```
+
+#Ominpath VEGFA Top genes 
+```{r}
+VEGF_pathway_genes <- read_csv("Ominpath_Top_500_genes_VEGFA_pathway.csv") %>%
+  dplyr::arrange(desc(weight)) %>% 
+  dplyr::filter(weight > 0) %>% 
+  slice_max(order_by = weight, n = 100) %>% 
+  dplyr::select(target) %>% unlist()
+
+HALLMARKS_ANGIOGENESIS <- msigdbr(species = "Homo sapiens", category = "H") %>% 
+  dplyr::filter(gs_name == "HALLMARK_ANGIOGENESIS") %>% 
+  dplyr::select(gene_symbol) %>% unlist() %>% unique()
+
+
+
+Plot_counts_signature(VSD_Counts_long, VEGF_pathway_genes_positive) %>% 
+  ggsave(., filename = "plot/VEGF_pathway_genes_positive_from_decoupler_top100.png", dpi = 300, height = 6, width = 8)
+Plot_counts_signature(VSD_Counts_long, HALLMARKS_ANGIOGENESIS) %>% 
+  ggsave(., filename = "plot/HAllmarks_angiogenesis.png", dpi = 300, height = 6, width = 8)
+```
+
+#Plot SOLO CAS9 hypoxia
+```{r}
+HIF1a_4_cell_lines_promoter <- read_lines("/media/alessio/Data/hypoxia/HIF1A_datasets/PRJNA823676/HIF1a_4_celllines_peaks_in_promoter_GTFv44.txt")
+
+HIF2a_4_cell_lines_promoter <- read_lines("/media/alessio/Data/hypoxia/HIF1A_datasets/PRJNA823676/HIF2a_4_celllines_peaks_in_promoter_GTFv44.txt")
+
+HALLMARKS_HYPOXIA <- msigdbr(species = "Homo sapiens", category = "H") %>% 
+  dplyr::filter(gs_name == "HALLMARK_HYPOXIA") %>% 
+  dplyr::select(gene_symbol) %>% unlist() %>% unique()
+
+decoupleR_hypoxia_100_genes <- read_csv("Ominpath_Top_500_genes_hypoxia_pathway.csv") %>% 
+    dplyr::arrange(desc(weight)) %>% 
+  dplyr::filter(weight > 0) %>% 
+  slice_max(order_by = weight, n = 100) %>% 
+  dplyr::select(target) %>% unlist()
+
+Plot_counts_signature_only_Cas9(VSD_Counts_long, HIF1a_4_cell_lines) %>% 
+  ggsave(filename = "plot/HIF1a_4_cell_lines.png", dpi = 300, height = 6, width = 4)
+
+Plot_counts_signature_only_Cas9(VSD_Counts_long, HIF2a_4_cell_lines) %>% 
+  ggsave(filename = "plot/HIF2a_4_cell_lines.png", dpi = 300, height = 6, width = 4)
+
+Plot_counts_signature_only_Cas9(VSD_Counts_long, HALLMARKS_HYPOXIA) %>% 
+  ggsave(filename = "plot/HALLMARKS_HYPOXIA.png", dpi = 300, height = 6, width = 4)
+
+Plot_counts_signature_only_Cas9(VSD_Counts_long, decoupleR_hypoxia_100_genes) %>% 
+  ggsave(filename = "plot/decoupleR_hypoxia.png", dpi = 300, height = 6, width = 4)
+```
+
+#Plot geni splicing
+```{r}
+Reg_of_rna_splicing_signature <- read.gmt("/home/alessio/Downloads/GOBP_RNA_SPLICING.v2024.1.Hs.gmt") %>% #questa da significatività
+  dplyr::select(gene) %>% unlist()
+
+Plot_counts_signature_only_Cas9(VSD_Counts_long, Reg_of_rna_splicing_signature) %>% 
+  ggsave(filename = "plot/GOBP_RNA_SPLICING.v2024.1.Hs.png", dpi = 300, height = 6, width = 4)
+```
+
+
+#Plot su top 10 geni interferon Upregolati con i TPM o VSD Counts
+```{r}
+#Estraggo dai risultati di DESEq i 10 geni più upregolati nella interferon pathway H4KO vs Cas9 normoxia
+If_gamma_top10_Upreg_genes_H4KO_vs_Cas9_0h <- DESEq2_results %>%
+  dplyr::filter(Comparison == "H4KO_vs_Cas9_0h") %>% 
+  unnest(Results) %>% 
+  dplyr::filter(symbol %in% HALLMARKS_IF_A & Dexpr == "UP") %>% 
+  dplyr::select(symbol, log2FoldChange, padj) %>% 
+  dplyr::arrange(desc(log2FoldChange)) %>% 
+  # slice_max(order_by = log2FoldChange, n = 10) %>% 
+  dplyr::select(symbol) %>% unlist()
+```
+
+```{r}
+#TPM_10_Top_Ifa_Upreg_normoxia
+Plot_TPM_10_Top_Ifa_Upreg_normoxia <- TPM_long %>% 
+  dplyr::filter(time == "0h") %>% 
+  dplyr::filter(symbol %in% If_gamma_top10_Upreg_genes_H4KO_vs_Cas9_0h[1:10]) %>% 
+  ggplot(aes(x = symbol, y = counts, fill = type_time)) +
+  geom_boxplot() +
+  # geom_text(aes(label = counts)) +
+  scale_fill_manual(values = c("#854ddc", "#FF007F")) +    
+  labs(x = NULL,
+       y = "TPM") +
+  facet_wrap(~ symbol, scales = "free", ncol = 5) +
+  stat_compare_means(method = "wilcox.test",  size = 3) +
+  theme_bw() +
+  lims(y = c(0,NA)) +
+  theme(axis.text.x = element_blank())
+
+Plot_TPM_10_Top_Ifa_Upreg_normoxia
+
+#ggsave(Plot_TPM_10_Top_Ifa_Upreg_normoxia, filename = "plot/TPM_10_Top_Ifa_Upreg_normoxia.pdf", dpi = 300, height = 6, width = 8)
+```
+
+#################
+#Plot single gene
+#################
+```{r}
+Plot_counts_single_gene_signature <- function(df, genelist) {
+  
+  name_glist <- deparse(substitute(genelist))
+  
+  dir.create(paste0("plot/Boxplots_single_gene/",name_glist)) 
+  
+  df <- df %>%
+    dplyr::mutate(type_time = fct_relevel(type_time, c("Cas9_0h", "Cas9_6h", "Cas9_24h", "Cas9_48h",
+                                                  "H4KO_0h", "H4KO_6h", "H4KO_24h", "H4KO_48h")))
+  for (gene in genelist) {
+   Plot <- df %>%
+      dplyr::filter(symbol == gene) %>%
+      ggplot(aes(x = type_time, y = counts, fill = type)) +
+      geom_boxplot(outliers = F) +
+      scale_fill_manual(values = c("#854ddc", "#FF007F")) +
+      geom_point(aes(shape = clone), size = 2) +
+      stat_compare_means(method = "wilcox.test", 
+                        comparisons = list(c("Cas9_0h", "H4KO_0h")), 
+                        symnum.args = list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, Inf),
+                             symbols = c("****", "***", "**", "*", "ns")), vjust = 0.5, hide.ns = T) +
+     labs(x = NULL,
+          y = "TPM",
+          title = gene) +
+     theme_bw() +
+     theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+   print(Plot)
+   ggsave(Plot, filename = str_c("plot/Boxplots_single_gene/",name_glist,"/",gene,".pdf"), dpi = 300, width = 4, height = 5) #4 5 e .pdf per quelle mandate al prof solo normoxia
+  }
+}
+```
+
+```{r}
+#If Gamma Top 10 upregulated genes in normoxia H4KO vs Cas9
+Plot_counts_single_gene_signature(Norm_counts_long, If_gamma_top10_Upreg_genes_H4KO_vs_Cas9_0h)
+
+#Hallmarks angiogenesis
+Plot_counts_single_gene_signature(Norm_counts_long, HALLMARKS_ANGIOGENESIS)
+
+#Lista geni primer PCR
+genes_PCR <- c("LDHA", "PGAM1", "PGK1", "TPI1", "HMOX1", "NQO1", "VEGFA", "VEGFC")
+Plot_counts_single_gene_signature(TPM_long, genes_PCR)
+
+#HDACs
+HDACs <- c("HDAC1", "HDAC2", "HDAC3", "HDAC4", "HDAC5", "HDAC6", "HDAC7", "HDAC8", "HDAC9", "HDAC10", "HDAC11")
+Plot_counts_single_gene_signature(TPM_long %>% dplyr::filter(time == "0h"), HDACs)
+
+
+#HIF2a
+HIFs <- c("HIF1A", "EPAS1", "HIF3A")
+Plot_counts_single_gene_signature(TPM_long, HIFs)
+```
+
+
+#################################
+#split TPM geni hypoxia solo Cas9
+#################################
+
+#Dalla matrice di TPM classifico i geni sulla base del livello medio di espressione
+```{r}
+#TPM groups:
+  # <0.5 : very low
+  # 0.5 - 10 : low
+  # 10 - 1000 : medium
+  # > 1000 : high
+
+TPM_Cas9 <- read_csv("Count_Tabs/TPM.csv") %>% 
+  left_join(gns_geneidversion_symbol, by = "gene_id_version") %>% 
+  dplyr::select(-gene_id_version) %>% 
+  dplyr::filter(!is.na(symbol) & !duplicated(symbol)) %>% 
+  column_to_rownames(var = "symbol") %>% 
+  dplyr::select(matches("^R[1-4]"))
+
+
+TPM_Cas9_defined <- TPM_Cas9 %>% 
+  rownames_to_column(var = "symbol") %>% 
+  rowwise() %>% 
+  mutate(Median = median(c_across(starts_with("R")), na.rm = F)) %>% #faccio la mediana tra i campioni per ogni gene
+  dplyr::mutate(Group = case_when( #suddivido sulla base della mediana calcolata
+    Median < 0.5 ~ "very_low", #rimangono dopo degli outlier nonostante tutto
+    Median > 0.5 & Median < 10 ~ "low",
+    Median > 10 & Median < 1000 ~ "medium",
+    Median > 1000 ~ "high"
+  )) %>% 
+  pivot_longer(cols = starts_with("R"), names_to = "names", values_to = "counts") %>% #pivot longer
+  left_join(coldata[,c("names", "time")], by = "names")
+```
+
+#Plot
+```{r}
+#Funzione per creare il plot solo Cas9
+Plot_TPM_classified_Cas9 <- function(df, signature) {
+  
+  #filtra e relevel
+  df <- df %>% 
+    dplyr::filter(symbol %in% signature) %>% 
+    dplyr::mutate(Group = fct_relevel(Group, c("very_low", "low", "medium", "high"))) %>% 
+    dplyr::mutate(time = fct_relevel(time, c("0h", "6h", "24h", "48h")))
+    
+  #calcola la media per ogni gruppo e tempo
+  df_mean <- df %>% 
+    group_by(time, Group) %>% 
+    summarize(average = mean(counts)) %>% 
+    ungroup()
+
+  #plot
+  df %>%
+    dplyr::filter(symbol %in% signature) %>%
+    ggplot(aes(x = time, y = counts)) +
+    geom_boxplot(fill = "#854ddc",
+                 outliers = F) +
+    geom_jitter(width = 0.1, size = 0.05) +
+    geom_point(data = df_mean, aes(x = time, y = average), color = "black", fill = "red", shape = 21) +
+    geom_line(data = df_mean, aes(x = time, y = average, group = 1), color = "red") +
+    labs(title = deparse(substitute(signature)),
+         y = "TPM",
+         x = NULL) +
+    stat_compare_means(method = "wilcox.test",
+                       comparisons = list(c("0h", "6h"),
+                                          c("0h", "24h"),
+                                          c("0h", "48h"),
+                                          c("6h", "24h"),
+                                          c("24h", "48h")),
+                        symnum.args = list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, Inf),
+                        symbols = c("****", "***", "**", "*", "ns")),
+                       na.rm = T,
+                       paired = F) +
+    facet_wrap(~ Group, scales = "free", ncol = 4) +
+    theme_bw()
+}
+
+
+X <- Plot_TPM_classified_Cas9(TPM_Cas9_defined, HALLMARKS_HYPOXIA)
+Y <- Plot_TPM_classified_Cas9(TPM_Cas9_defined, decoupleR_hypoxia_100_genes)
+Z <- Plot_TPM_classified_Cas9(TPM_Cas9_defined, HIF1a_4_cell_lines_promoter)
+S <- Plot_TPM_classified_Cas9(TPM_Cas9_defined, HIF2a_4_cell_lines_promoter)
+
+X
+Y
+Z
+S
+
+ggsave(X, filename = "plot/TPM_class_HALLMARKS_HYPOXIA.png", dpi = 300, height = 6, width = 8)
+ggsave(Y, filename = "plot/TPM_class_decoupleR_hypoxia_100_genes.png", dpi = 300, height = 6, width = 8)
+ggsave(Z, filename = "plot/TPM_class_HIF1a_4_cell_lines_promoter.png", dpi = 300, height = 6, width = 8)
+ggsave(S, filename = "plot/TPM_class_HIF2a_4_cell_lines_promoter.png", dpi = 300, height = 6, width = 8)
+```
+

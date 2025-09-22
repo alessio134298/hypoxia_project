@@ -1,0 +1,191 @@
+#library
+```{r setup, echo = FALSE}
+library(DESeq2)
+library(tidyverse)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(gridExtra)
+library(rafalib)
+library(AnnotationHub)
+```
+
+#Genes from annotationHub
+```{r setup, echo = FALSE}
+ah <- AnnotationHub(localHub = FALSE)
+query(ah , c("Homo sapiens", "Ensembl","EnsDb", "110"))
+edb <- ah[["AH113665"]]
+gns <- as.data.frame(genes(edb, return.type = "DataFrame")) 
+rm(edb, ah)
+```
+
+#Creo la matrice
+```{r}
+path = "/media/alessio/Data/hypoxia/RNAseq/samples/"
+
+dir = c("CAS9_24h_hypoxia_rep1", "CAS9_24h_hypoxia_rep2", "CAS9_24h_hypoxia_rep3", "CAS9_24h_hypoxia_rep4", "CAS9_48h_hypoxia_rep1", "CAS9_48h_hypoxia_rep2", "CAS9_48h_hypoxia_rep3", "CAS9_48h_hypoxia_rep4", "CAS9_6h_hypoxia_rep1", "CAS9_6h_hypoxia_rep2", "CAS9_6h_hypoxia_rep3", "CAS9_6h_hypoxia_rep4", "CAS9_normoxia_rep1", "CAS9_normoxia_rep2", "CAS9_normoxia_rep3", "CAS9_normoxia_rep4", "H4KO_cl125_24h_hypoxia", "H4KO_cl125_24h_hypoxia_repB", "H4KO_cl125_48h_hypoxia", "H4KO_cl125_48h_hypoxia_repB", "H4KO_cl125_6h_hypoxia", "H4KO_cl125_6h_hypoxia_repB", "H4KO_cl125_normoxia", "H4KO_cl125_normoxia_repB", "H4KO_cl26_24h_hypoxia", "H4KO_cl26_24h_hypoxia_repB", "H4KO_cl26_48h_hypoxia", "H4KO_cl26_48h_hypoxia_repB", "H4KO_cl26_6h_hypoxia", "H4KO_cl26_6h_hypoxia_repB", "H4KO_cl26_normoxia", "H4KO_cl26_normoxia_repB")
+
+file_name = "STAR_quant_4c.tab"
+
+Count_matrix <- data.frame()
+
+for(i in dir) {
+    current_file <- file.path(path, i, file_name)
+    tmp <- read.delim(current_file, header = FALSE, sep = "\t", col.names = c("gene_id", "count")) %>%
+      mutate(sample = i)
+    Count_matrix <- bind_rows(Count_matrix, tmp)
+}
+
+rm(tmp, i, current_file, dir, file_name, path)
+
+Count_matrix <- Count_matrix |> 
+  pivot_wider(names_from = sample,
+              values_from = count) |>
+  column_to_rownames(var = "gene_id")
+rownames(Count_matrix) <- sub("\\..*", "", rownames(Count_matrix))
+```
+
+#DESeq2 time course
+```{r}
+coldata <- read_csv("/media/alessio/Data/hypoxia/RNAseq/experiment.csv")
+
+
+#rifaccio coldata from scratch
+coldata_time_course <- data.frame(sampleID = as.factor(coldata$sampleID),
+                                  cell_line = factor(c(rep("control", 16), rep("H4KO", 16))),
+                                  time = as.factor(str_remove(coldata$time, "h")),
+                                  mergerep_time = as.factor(coldata$mergerep_time))
+
+
+dds_timecourse <- DESeqDataSetFromMatrix(countData = Count_matrix,
+                                            colData = coldata_time_course,
+                                            design = ~ cell_line + time + cell_line:time)
+
+dds_timecourse <- DESeq(dds_timecourse, test = "LRT", reduced = ~ cell_line + time)
+
+resultsNames(dds_timecourse)
+
+vsd_timecourse <- vst(dds_timecourse, blind = FALSE)
+
+plotPCA(vsd_timecourse, intgroup = "cell_line") + theme_bw()
+
+# #non so se sia corretto ma setto i livelli di base
+# dds_timecourse$condition <- relevel(dds_timecourse$condition , ref = "control")
+# 
+# vsd_timecourse <- vst(dds_timecourse, blind=FALSE)
+# 
+# plotPCA(vsd_timecourse, intgroup = "line")
+# 
+# boxplot(log10(assays(dds_timecourse)[["cooks"]]), range=0, las=2) #misura gli outliers
+# 
+```
+
+
+```{r}
+res_timecourse <- results(dds_timecourse, name = "cell_lineH4KO.time48")
+head(res_timecourse[order(res_timecourse$padj),], 4)
+
+fiss <- plotCounts(dds_timecourse, gene = "ENSG00000258667", 
+                   intgroup = c("cell_line","time"), returnData = TRUE)
+fiss <- fiss |> dplyr::mutate(time = fct_relevel(time, c("0", "6", "24", "48"))) 
+fiss$time <- as.numeric(as.character(fiss$time))
+
+ggplot(fiss, aes(x = time, y = count, color = cell_line, group = cell_line)) +
+  geom_point(size = 2) +
+  #stat_summary(fun.y = mean, geom = "line") +
+  scale_y_log10() +
+  theme_bw()
+```
+
+
+#results, non setto il contrast  perchè (in teoria), dovrei vedere influenzati dai vari tempi
+```{r}
+results_timecourse <- list(H4KO_6h = H4KO_6h <- results(dds_timecourse, name = "cell_lineH4KO.time6"),
+                           H4KO_24h = H4KO_24h <- results(dds_timecourse, name = "cell_lineH4KO.time24"),
+                           H4KO_48h = H4KO_48h <- results(dds_timecourse, name = "cell_lineH4KO.time48"))
+
+Upreg_timecourse <- lapply(results_timecourse, function(df) {
+  UP <- as.data.frame(df) |> 
+    dplyr::filter(log2FoldChange >= 0.75 & padj <= 0.05) |> 
+    rownames_to_column(var = "gene_id") |> 
+    left_join(gns, by = "gene_id") |> 
+    dplyr::select(1:8, entrezid)
+  return(UP)
+})  
+
+GO_Upreg_Timecourse_H4KO <- lapply(Upreg_timecourse, function(df) {
+  enriched <- enrichGO(gene = df$entrezid,
+                       OrgDb = org.Hs.eg.db,
+                       keyType = "ENTREZID",
+                       ont  = "BP",
+                       pAdjustMethod = "BH",
+                       qvalueCutoff  = 0.05
+  )
+  return(enriched)
+})
+
+
+for (i in names(GO_Upreg_Timecourse_H4KO)) {
+  tryCatch({  
+    dotplot <- dotplot(GO_Upreg_Timecourse_H4KO[[i]], showCategory = 20) +
+      ggtitle(paste0(i," Upregulated"))
+    print(dotplot)
+    #ggsave(dotplot, filename = paste0("/media/alessio/Data/hypoxia/RNAseq/plot/ORA/Time_course_analysis_Upregulated",i,".png"), dpi = 300, height = 12, width = 9)
+  },
+  error = function(e) {
+    cat("Error:", conditionMessage(e), "\n")
+  })}
+
+#da degli arricchimenti su hypoxia a 24 e 48h
+```
+
+#creo immagine con tabella di UP e DOWN regolati
+```{r}
+results_timecourse_Annotated <- lapply(results_timecourse, function(df) {
+  DEXpr <- as.data.frame(df) |> 
+    dplyr::mutate(dexpr = case_when(
+      (log2FoldChange >= 0.75 & padj <= 0.05) ~ "UP",
+      (log2FoldChange <= -0.75 & padj <= 0.05) ~ "DOWN",
+      TRUE ~ "ns"
+    ))
+  return(DEXpr)
+})
+
+Dexpr_counts <- data.frame()
+
+for (i in names(results_timecourse_Annotated)) {
+counts <- results_timecourse_Annotated[[i]] |> 
+  group_by(dexpr) |> 
+  dplyr::count() |> 
+  dplyr::mutate("Sample" = i)
+Dexpr_counts <- bind_rows(Dexpr_counts, counts)
+}
+
+Dexpr_counts <- Dexpr_counts |> 
+  pivot_wider(names_from = dexpr, values_from = n)
+
+# png(filename = "/media/alessio/Data/hypoxia/RNAseq/plot/Time_course_dexpr_summary.png", units = "cm", res = 300, height = 6, width = 16)
+# p<-tableGrob(Dexpr_counts)
+# grid.arrange(p)
+# dev.off()
+```
+
+
+#results di H4KO vs control
+```{r}
+results_timecourse_H4KO <- results(dds_timecourse, contrast=list("cell_line_H4KO_vs_control", "time_24_vs_0"))
+
+Upreg_timecourse_H4KO <- as.data.frame(results_timecourse_H4KO) |> 
+  dplyr::filter(log2FoldChange >= 0.75 & padj <= 0.05) |> 
+  rownames_to_column(var = "gene_id") |> 
+  left_join(gns, by = "gene_id") |> 
+  dplyr::select(1:8, entrezid)
+  
+
+GO_Upreg_Timecourse_H4KO <- enrichKEGG(gene = Upreg_timecourse_H4KO$entrezid
+                        )
+
+dotplot(GO_Upreg_Timecourse_H4KO, showCategory = 20)
+#non da niente di significativo ne con Gene ontology ne con kegg
+```
+
+

@@ -1,0 +1,577 @@
+```{r setup, echo = F}
+library(tidyverse)
+library(DESeq2)
+library(clusterProfiler)
+library(tximeta)
+library(AnnotationHub)
+library(msigdbr)
+library(enrichplot)
+library(ggpubr)
+
+
+#Genes object
+ah <- AnnotationHub(localHub = FALSE)
+query(ah , c("Homo sapiens", "Ensembl","EnsDb", "110"))
+edb <- ah[["AH113665"]]
+gns <- as.data.frame(genes(edb, return.type = "DataFrame")) 
+rm(edb, ah)
+
+gns_geneidversion_symbol_entrexid <- gns %>% 
+  dplyr::select(gene_id_version, symbol, entrezid)
+
+gns_geneidversion_symbol <- gns %>% 
+  dplyr::select(gene_id_version, symbol)
+```
+
+#Lettura coldata
+```{r}
+#coldata <- read_csv("Experiment.csv") #nuovo H4KO cl26
+coldata <- read_csv("Experiment_oldcl26.csv") #vecchio H4KO cl26
+```
+
+
+#TXIMETA
+```{r, echo = F}
+#tximeta import
+Hypoxia_se <- tximeta(coldata = coldata)
+
+#summarize to gene
+Hypoxia_se_summarized_to_genes <- summarizeToGene(Hypoxia_se)
+
+#rowRanges(Hypoxia_se_summarized_to_genes)
+```
+
+#DESEQ2
+```{r}
+dds <- DESeqDataSet(Hypoxia_se_summarized_to_genes, design = ~ Group_time)
+
+smallestGroupSize <- 2
+keep <- rowSums(counts(dds) >= 10) >= smallestGroupSize
+dds <- dds[keep,]
+
+dds <- DESeq(dds)
+```
+
+#TRASFORM & PCA
+```{r}
+vsd <- vst(dds,  blind=FALSE)
+
+pcaData <- plotPCA(vsd, intgroup =c("clone", "time"), returnData = T)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+PCA_allsamples <- ggplot(pcaData, aes(PC1, PC2, fill = clone, shape = time)) +
+  geom_point(size = 5) +
+  scale_shape_manual(values = c(21L, 22L, 23L, 24L)) +
+  scale_fill_manual(values = c("#854ddc", "#FF007F", "#FF007F")) +
+ # geom_text(aes(label = group), size = 3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  guides(fill = guide_legend(override.aes = list(shape=21))) +
+  coord_fixed() +
+  theme_bw()
+
+PCA_allsamples
+```
+
+######################
+#Analisi differenziale
+######################
+
+```{r}
+DESEq2_results_sep_clones_H4KO_vs_Cas9 <- list(
+  H4KO_cl125_vs_Cas9_0h = results(dds, contrast = c("Group_time", "H4KO_cl125_0h", "Cas9_cl125_0h")),
+  H4KO_cl125_vs_Cas9_6h = results(dds, contrast = c("Group_time", "H4KO_cl125_6h", "Cas9_cl125_6h")),
+  H4KO_cl125_vs_Cas9_24h = results(dds, contrast = c("Group_time", "H4KO_cl125_24h", "Cas9_cl125_24h")),
+  H4KO_cl125_vs_Cas9_48h = results(dds, contrast = c("Group_time", "H4KO_cl125_48h", "Cas9_cl125_48h")),
+  H4KO_cl26_vs_Cas9_0h = results(dds, contrast = c("Group_time", "H4KO_cl26_0h", "Cas9_cl26_0h")),
+  H4KO_cl26_vs_Cas9_6h = results(dds, contrast = c("Group_time", "H4KO_cl26_6h", "Cas9_cl26_6h")),
+  H4KO_cl26_vs_Cas9_24h = results(dds, contrast = c("Group_time", "H4KO_cl26_24h", "Cas9_cl26_24h")),
+  H4KO_cl26_vs_Cas9_48h = results(dds, contrast = c("Group_time", "H4KO_cl26_48h", "Cas9_cl26_48h"))
+) %>%
+  enframe(name = "Comparison", #nested
+          value = "Results") %>% 
+  dplyr::mutate(Results = map(Results, \(x) as.data.frame(x) %>% 
+                                dplyr::mutate(Dexpr = case_when(
+                                  (log2FoldChange > 0.75 & padj < 0.05) ~ "UP",
+                                  (log2FoldChange < -0.75 & padj < 0.05) ~ "DOWN",
+                                  TRUE ~ "ns"
+                                )
+                                ) %>%
+                                rownames_to_column("gene_id_version") %>% 
+                                left_join(gns_geneidversion_symbol_entrexid, by = "gene_id_version")
+                              
+  )
+  )
+```
+
+#Salvo
+```{r}
+DESEq2_results_sep_clones_H4KO_vs_Cas9 %>% 
+  dplyr::mutate(Results = map(Results, \(x) dplyr::select(x, -entrezid))) %>% 
+  deframe() %>% 
+  openxlsx::write.xlsx("Tab_files/DESeq2_Results_Sep_clones_H4KO_vs_Cas9.xlsx")
+```
+
+
+#Summary dei risultati
+```{r}
+Summary_Dexpr_sep_clones <- DESEq2_results_sep_clones_H4KO_vs_Cas9 %>% 
+  dplyr::mutate(Count_Dexpr = map(Results, \(x) x %>% 
+                                    group_by(Dexpr) %>% 
+                                    summarize(Count = n()) %>% 
+                                    dplyr::filter(Dexpr != "ns"))
+  ) %>% 
+  dplyr::select(!Results) %>% 
+  unnest(Count_Dexpr)
+
+Summary_Dexpr_sep_clones
+```
+
+#Venn Diagram comuni fra i due cloni upregolati e downregolati nel HDAC4 -/-
+```{r}
+#estraggo up e down
+DEXPR_DESEq2_results_sep_clones_H4KO_vs_Cas9 <- DESEq2_results_sep_clones_H4KO_vs_Cas9 %>% 
+  dplyr::mutate(UP = map(Results, \(x) dplyr::filter(x, Dexpr == "UP") %>% #estraggo gli Up e down symbol
+                           dplyr::select(symbol) %>% unlist()), #prima era gene id version per i plot
+                DOWN = map(Results, \(x) dplyr::filter(x, Dexpr == "DOWN") %>% 
+                           dplyr::select(symbol) %>% unlist())) %>% 
+  dplyr::select(!Results) %>% 
+  dplyr::mutate(time = str_extract(Comparison, "(?<=Cas9_).*")) %>% #definisco le variabili per raggruppare
+  dplyr::mutate(clone = ifelse(str_detect(Comparison, "125"), "cl125", "cl26"))
+  
+
+#UPregolati
+UP <- DEXPR_DESEq2_results_sep_clones_H4KO_vs_Cas9 %>%
+  dplyr::select(-DOWN) %>% 
+  unnest(UP) %>% 
+  group_by(time) %>%
+  summarize(
+    UP_shared_genes = list(
+      intersect(
+        UP[clone == "cl125"],
+        UP[clone == "cl26"]
+      )),
+    UP_only125_genes = list(
+      setdiff(
+        UP[clone == "cl125"],
+        UP[clone == "cl26"]
+      )),
+    UP_only26_genes = list(
+      setdiff(
+        UP[clone == "cl26"],
+        UP[clone == "cl125"]
+      )),
+  )
+
+#DOWNregolati
+DOWN <- DEXPR_DESEq2_results_sep_clones_H4KO_vs_Cas9 %>%
+  dplyr::select(-UP) %>% 
+  unnest(DOWN) %>% 
+  group_by(time) %>%
+  summarize(
+    DOWN_shared_genes = list(
+      intersect(
+        DOWN[clone == "cl125"],
+        DOWN[clone == "cl26"]
+      )),
+    DOWN_only125_genes = list(
+      setdiff(
+        DOWN[clone == "cl125"],
+        DOWN[clone == "cl26"]
+      )),
+    DOWN_only26_genes = list(
+      setdiff(
+        DOWN[clone == "cl26"],
+        DOWN[clone == "cl125"]
+      )),
+  )
+
+UP
+DOWN
+```
+
+#Da mandare al prof.
+```{r}
+list("Up_common_genes" = UP[[2]][[1]],
+       "Down_common_genes" = DOWN[[2]][[1]]) %>% 
+  openxlsx::write.xlsx(file = "Tab_files/Upreg_common_normoxia.xlsx")
+```
+
+
+#VENN DIAGRAM
+```{r}
+library(ggVennDiagram)
+#Convert il dataframe in ua lista (ci serve per usare ggVennDiagram)
+#UP
+UP_list <- DEXPR_DESEq2_results_sep_clones_H4KO_vs_Cas9 %>%
+  dplyr::select(UP, time, clone) %>%
+  dplyr::mutate(clone = str_c("UP_HDAC4_KO_", clone)) %>% 
+  group_by(time) %>% 
+  summarise(nested = list(setNames(UP, clone))) %>% #interessante questo
+  deframe()
+
+#DOWN
+DOWN_list <- DEXPR_DESEq2_results_sep_clones_H4KO_vs_Cas9 %>%
+  dplyr::select(DOWN, time, clone) %>%
+  dplyr::mutate(clone = str_c("DOWN_HDAC4_KO_", clone)) %>% 
+  group_by(time) %>% 
+  summarise(nested = list(setNames(DOWN, clone))) %>% #interessante questo
+  deframe()
+
+
+#Venn Diagram
+make_VennDiagram <- function(x, color, title) {
+  
+  ggVennDiagram(x, label_alpha = 0) +
+  coord_flip() +
+  scale_fill_gradient2(low = "white", high = color) +
+  labs(title = title) +
+  theme(legend.position = "none",
+        plot.title = element_text(hjust = 0.5))
+}
+
+for (i in names(UP_list)) {
+  Venn <- make_VennDiagram(UP_list[[i]], "red", i)
+  print(Venn)
+  
+  ggsave(Venn, filename = str_c("plot/Venn_Two_clones_intersect/","UP_",i,".png"), dpi = 300, width = 8, height = 6, bg = "white")
+}
+
+for (i in names(DOWN_list)) {
+  Venn <- make_VennDiagram(DOWN_list[[i]], "blue", i)
+  print(Venn)
+  
+   ggsave(Venn, filename = str_c("plot/Venn_Two_clones_intersect/","DOWN_",i,".png"), dpi = 300, width = 8, height = 6, bg = "white")
+}
+```
+
+#PATHWAY ENRICHMENT sui geni comuni fra i due cloni
+```{r}
+#Dataframe solo con i geni condivisi
+DEGS_common <- bind_rows((UP %>% 
+  dplyr::rename_with(~ gsub("UP_", "", .x), starts_with("UP_")) %>% 
+  dplyr::mutate(UP_DOWN = "UP")),
+  DOWN %>% 
+  dplyr::rename_with(~ gsub("DOWN_", "", .x), starts_with("DOWN_")) %>% 
+  dplyr::mutate(UP_DOWN = "DOWN")) %>% 
+  dplyr::select(time, UP_DOWN, shared_genes)
+
+
+#MSIGDB annotazioni
+#creo lista di annotazioni
+sig_names <- c("GO:BP", "GO:CC", "GO:MF", "HPO", "KEGG", "REACTOME", "WIKIPATHWAYS")
+Msigdbr_signture_lists <- list()
+
+for (i in 1:length(sig_names)) {
+msigdb_df <- msigdbr(species = "Homo sapiens", subcategory = sig_names[[i]]) %>% 
+  dplyr::select(gs_name, human_gene_symbol) #gene symbol serve per la GSEA dopo
+name = sig_names[[i]]
+Msigdbr_signture_lists[[name]] <- msigdb_df
+rm(msigdb_df)
+}
+
+#aggiungo questa a mano perchè non era nelle subcategories
+Msigdbr_signture_lists[["HALLMARKS"]] <- msigdbr(species = "Homo sapiens", category = "H") %>% 
+  dplyr::select(gs_name, human_gene_symbol)
+
+
+#funzione per creare la lista con gli enrichment
+Return_enrich_list <- function(genes, msigdb_list) {
+  enrich_list <- list()
+  for (i in names(msigdb_list)) {
+    enrichment <- enricher(gene = genes,
+                            TERM2GENE = msigdb_list[[i]], #elimino la colonna con i gene symbol
+                            pAdjustMethod = "BH"
+    )
+    name = str_replace(i, ":", "_")
+    enrich_list[[name]] <- enrichment
+    # names(enrich_list)[[i]] <- gsub(":", "_", names(msigdb_list)[[i]])
+  }
+  return(enrich_list)
+}
+
+#Applico funzione con map
+Msigdb_enrichment_DEGS_common <- DEGS_common %>% 
+  dplyr::mutate(Msigdb_enrichment = map(shared_genes, function(x) {
+                                        #print(x)
+                                        Return_enrich_list(x, Msigdbr_signture_lists)  
+                                        })
+                )
+
+#Gene ontology enrichment e plot
+GO_enrichment_DEGS_common <- DEGS_common %>% 
+  dplyr::mutate(GO_enrichment = map(shared_genes, \(x) enrichGO(x,
+                                                                ont = "BP",
+                                                                keyType = "SYMBOL",
+                                                                OrgDb = "org.Hs.eg.db")
+                                    )
+                )
+
+
+GO_enrichment_DEGS_common[[4]][[8]]
+```
+
+#Salvo liste Msigdb e plot GO
+```{r}
+apply(Msigdb_enrichment_DEGS_common, MARGIN = 1, function(row) 
+  openxlsx::write.xlsx(x = row[["Msigdb_enrichment"]], file = str_c("Tab_files/Msigdb_sep_clones/",
+                                                                    row[["UP_DOWN"]],"_","H4KO_vs_Cas9_",row[["time"]],".xlsx"))
+  )
+
+apply(GO_enrichment_DEGS_common, MARGIN = 1, function(row) 
+  tryCatch( expr = {dotplot(object = row[["GO_enrichment"]],
+                            showCategory = 20,
+                            title = paste0(row[["UP_DOWN"]],"_","H4KO_vs_Cas9_",row[["time"]])) %>% 
+      ggsave(filename = str_c("plot/GO_BP_enrichment/Sep_clones_common/",row[["UP_DOWN"]],"_","H4KO_vs_Cas9_",row[["time"]],".png"), dpi = 300, height = 8, width = 7)
+  }, error = function(e){
+    message('Caught an error!')
+    print(e)
+    NULL
+  }
+  )
+)
+
+```
+
+
+############
+#Vs normoxia
+############
+
+```{r}
+DESEq2_results_sep_clones_Vs_normoxia <- list(
+  H4KO_cl125_6h = results(dds, contrast = c("Group_time", "H4KO_cl125_6h", "H4KO_cl125_0h")),
+  H4KO_cl125_24h = results(dds, contrast = c("Group_time", "H4KO_cl125_24h", "H4KO_cl125_0h")),
+  H4KO_cl125_48h = results(dds, contrast = c("Group_time", "H4KO_cl125_48h", "H4KO_cl125_0h")),
+  H4KO_cl26_6h = results(dds, contrast = c("Group_time", "H4KO_cl26_6h", "H4KO_cl26_0h")),
+  H4KO_cl26_24h = results(dds, contrast = c("Group_time", "H4KO_cl26_24h", "H4KO_cl26_0h")),
+  H4KO_cl26_48h = results(dds, contrast = c("Group_time", "H4KO_cl26_48h", "H4KO_cl26_0h")),
+  Cas9_cl125_6h = results(dds, contrast = c("Group_time", "Cas9_cl125_6h", "Cas9_cl125_0h")),
+  Cas9_cl125_24h = results(dds, contrast = c("Group_time", "Cas9_cl125_24h", "Cas9_cl125_0h")),
+  Cas9_cl125_48h = results(dds, contrast = c("Group_time", "Cas9_cl125_48h", "Cas9_cl125_0h")),
+  Cas9_cl26_6h = results(dds, contrast = c("Group_time", "Cas9_cl26_6h", "Cas9_cl26_0h")),
+  Cas9_cl26_24h = results(dds, contrast = c("Group_time", "Cas9_cl26_24h", "Cas9_cl26_0h")),
+  Cas9_cl26_48h = results(dds, contrast = c("Group_time", "Cas9_cl26_48h", "Cas9_cl26_0h"))
+) %>%
+  enframe(name = "Comparison", #nested
+          value = "Results") %>% 
+  dplyr::mutate(Results = map(Results, \(x) as.data.frame(x) %>% 
+                                dplyr::mutate(Dexpr = case_when(
+                                  (log2FoldChange > 0.75 & padj < 0.05) ~ "UP",
+                                  (log2FoldChange < -0.75 & padj < 0.05) ~ "DOWN",
+                                  TRUE ~ "ns"
+                                )
+                                ) %>%
+                                rownames_to_column("gene_id_version") %>% 
+                                left_join(gns_geneidversion_symbol_entrexid, by = "gene_id_version")
+                              
+  )
+  )
+```
+
+#Salvo
+```{r}
+DESEq2_results_sep_clones_Vs_normoxia %>% 
+  dplyr::mutate(Results = map(Results, \(x) dplyr::select(x, -entrezid))) %>% 
+  deframe() %>%
+  openxlsx::write.xlsx(file = "Tab_files/DESeq2_Results_Sep_clones_Vs_normoxia.xlsx")
+```
+
+
+#Summary dei risultati
+```{r}
+Summary_Dexpr_sep_clones_Vs_normoxia <- DESEq2_results_sep_clones_Vs_normoxia %>% 
+  dplyr::mutate(Count_Dexpr = map(Results, \(x) x %>% 
+                                    group_by(Dexpr) %>% 
+                                    summarize(Count = n()) %>% 
+                                    dplyr::filter(Dexpr != "ns"))
+  ) %>% 
+  dplyr::select(!Results) %>% 
+  unnest(Count_Dexpr) %>% 
+  separate_wider_delim(Comparison, delim = "_", names = c("type", "clone", "time")) %>% 
+  dplyr::mutate(clone = paste0(type,"_", clone)) %>% 
+  dplyr::select(-type)
+
+Summary_Dexpr_sep_clones_Vs_normoxia
+```
+
+#Barplot con i DEGS
+```{r}
+#Vs normoxia
+Vs_normoxia_Dexpr_Col_plot_sep_clones <- Summary_Dexpr_sep_clones_Vs_normoxia %>% 
+  dplyr::mutate(Count = ifelse(Dexpr == "UP", Count, -Count)) %>% 
+  dplyr::mutate(time = fct_relevel(time, c("6h", "24h", "48h"))
+                ) %>%
+  # dplyr::mutate(line = ifelse(str_detect(Comparison, "Cas9"), "Cas9", "H4KO")) %>% 
+  ggplot(aes(x = time, y = Count, fill = Dexpr)) +
+  geom_col(color = "black", width = 0.5) +
+  scale_fill_manual(values = c("UP" = "#eb1719", "DOWN" = "#4baae8")) +
+  geom_text(aes(x = time, 
+                y = ifelse(Dexpr == "UP", Count + 200, Count -200),
+                label = ifelse(Dexpr == "UP", Count, -Count))) +
+  facet_wrap(~ clone, scales = "free_x", ncol = 4) +
+  theme_bw() +
+  labs(x = NULL,
+       y = NULL) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.text.y=element_blank())
+
+Vs_normoxia_Dexpr_Col_plot_sep_clones
+```
+
+#Salvo plot
+```{r}
+ggsave(Vs_normoxia_Dexpr_Col_plot_sep_clones, filename = "plot/Vs_normoxia_Dexpr_Col_plot_sep_clones.png", dpi = 300, height = 6, width = 8)
+```
+
+#INTERSECT dei DEgs fra i due cloni ai tempi di ipossia, Venn diagram
+```{r}
+#ri organizzo il dataframe
+Genes_Dexpr_sep_clones_Vs_normoxia <- DESEq2_results_sep_clones_Vs_normoxia %>% 
+  dplyr::mutate(Degs_genes = map(Results, \(x) x %>% 
+                                   group_by(Dexpr) %>% 
+                                   dplyr::select(symbol) %>% 
+                                   summarise(symbol = list(setNames(symbol, Dexpr))) %>% 
+                                   dplyr::filter(Dexpr != "ns"))) %>% 
+  dplyr::select(!Results) %>% 
+  unnest(Degs_genes) %>% 
+  pivot_wider(names_from = Dexpr, values_from = symbol) %>% 
+  separate_wider_delim(cols = Comparison, delim = "_", names = c("type", "clone", "time")) %>% 
+  dplyr::mutate(type_time = str_c(type,time, sep = "_")) %>% 
+  dplyr::select(-c(type,time))
+
+Genes_Dexpr_sep_clones_Vs_normoxia
+```
+
+#VENN
+```{r}
+library(ggVennDiagram)
+#Convert il dataframe in ua lista (ci serve per usare ggVennDiagram)
+#UP
+UP_list_Vs_normoxia <- Genes_Dexpr_sep_clones_Vs_normoxia %>%
+  dplyr::select(UP, type_time, clone) %>% 
+  group_by(type_time) %>% 
+  summarise(nested = list(setNames(UP, clone))) %>% #interessante questo
+  deframe()
+
+#DOWN
+DOWN_list_Vs_normoxia <- Genes_Dexpr_sep_clones_Vs_normoxia %>%
+  dplyr::select(DOWN, type_time, clone) %>% 
+  group_by(type_time) %>% 
+  summarise(nested = list(setNames(DOWN, clone))) %>% #interessante questo
+  deframe()
+
+#Venn Diagram
+make_VennDiagram <- function(x, color, title) {
+  
+  ggVennDiagram(x, label_alpha = 0) +
+  coord_flip() +
+  scale_fill_gradient2(low = "white", high = color) +
+  labs(title = title) +
+  theme(legend.position = "none",
+        plot.title = element_text(hjust = 0.5))
+}
+
+for (i in names(UP_list_Vs_normoxia)) {
+  Venn <- make_VennDiagram(UP_list_Vs_normoxia[[i]], "red", i)
+  print(Venn)
+  
+  ggsave(Venn, filename = str_c("plot/Venn_Two_clones_intersect/","Vs_normoxia_UP_",i,".png"), dpi = 300, width = 8, height = 6, bg = "white")
+}
+
+for (i in names(DOWN_list_Vs_normoxia)) {
+  Venn <- make_VennDiagram(DOWN_list_Vs_normoxia[[i]], "blue", i)
+  print(Venn)
+  
+   ggsave(Venn, filename = str_c("plot/Venn_Two_clones_intersect/","Vs_normoxia_DOWN_",i,".png"), dpi = 300, width = 8, height = 6, bg = "white")
+}
+```
+
+
+#Salvo liste geni Up e down regolati solo per Cas9, in più aggiungo anche i relativi TPM dei geni
+#Report
+```{r}
+#Crea una lista con solo geni degs comuni Cas9 Vs normoxia
+#UP
+Cas9_Vs_normoxia_common_UP_genes <- Genes_Dexpr_sep_clones_Vs_normoxia %>%
+  dplyr::select(-DOWN) %>% 
+  dplyr::filter(str_detect(type_time, "Cas9")) %>% 
+  unnest(UP) %>% 
+  group_by(type_time) %>% 
+  summarize(common = list(intersect(UP[clone == "cl125"],
+                               UP[clone == "cl26"])
+                          )
+            ) %>% 
+  deframe()
+
+#DOWN
+Cas9_Vs_normoxia_common_DOWN_genes <- Genes_Dexpr_sep_clones_Vs_normoxia %>%
+  dplyr::select(-UP) %>% 
+  dplyr::filter(str_detect(type_time, "Cas9")) %>% 
+  unnest(DOWN) %>% 
+  group_by(type_time) %>% 
+  summarize(common = list(intersect(DOWN[clone == "cl125"],
+                               DOWN[clone == "cl26"]) %>% 
+                            discard(\(x) is.na(x))
+                          )
+            ) %>% 
+  deframe()
+
+# openxlsx::write.xlsx(Cas9_Vs_normoxia_common_UP_genes, file = "Tab_files/Cas9_Up_genes_common.xlsx")
+# openxlsx::write.xlsx(Cas9_Vs_normoxia_common_DOWN_genes, file = "Tab_files/Cas9_Down_genes_common.xlsx")
+
+#Allego nelle liste anche i TPM 
+TPM <- assay(dds, "abundance") %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "gene_id_version") %>% 
+  left_join(gns_geneidversion_symbol, by = "gene_id_version") %>% 
+  dplyr::filter(!is.na(symbol) & !duplicated(symbol)) %>%
+  column_to_rownames(var = "symbol") %>% 
+  dplyr::select(-gene_id_version)
+
+TPM_Cas9 <- TPM[,1:16]
+
+#write_delim(TPM_Cas9 %>%rownames_to_column("symbol"), "Count_Tabs/TPM_Cas9_filtered.tsv", delim = "\t", )
+```
+
+#salvo anche le genelist di Upregolati e Downregolati come txt per usarle per creare dei bed
+```{r}
+for (i in names(Cas9_Vs_normoxia_common_UP_genes)) {
+  write_lines(Cas9_Vs_normoxia_common_UP_genes[[i]], file = str_c("Upreg_genes_",i,".txt"))
+}
+
+for (i in names(Cas9_Vs_normoxia_common_DOWN_genes)) {
+  write_lines(Cas9_Vs_normoxia_common_DOWN_genes[[i]], file = str_c("Downreg_genes_",i,".txt"))
+}
+```
+
+
+#enrichemnt Cas9
+```{r}
+GO_enrichment_UP_Cas9 <- lapply(Cas9_Vs_normoxia_common_UP_genes, function(x) {
+  GO <- enrichGO(x, OrgDb = "org.Hs.eg.db", keyType = "SYMBOL", ont = "BP")
+  return(GO)
+})
+
+GO_enrichment_DOWN_Cas9 <- lapply(Cas9_Vs_normoxia_common_DOWN_genes, function(x) {
+  GO <- enrichGO(x, OrgDb = "org.Hs.eg.db", keyType = "SYMBOL", ont = "BP")
+  return(GO)
+})
+
+for (i in names(GO_enrichment_UP_Cas9)) {
+  if (is.null(GO_enrichment_UP_Cas9[[i]])) {
+    print("NULL")
+  } else {dotplot <- dotplot(GO_enrichment_UP_Cas9[[i]], title = str_c("UP_",i), showCategory = 20)
+          print(dotplot)
+  }
+}
+
+for (i in names(GO_enrichment_DOWN_Cas9)) {
+  if (is.null(GO_enrichment_DOWN_Cas9[[i]])) {
+    print("NULL")
+  } else {dotplot <- dotplot(GO_enrichment_DOWN_Cas9[[i]], title = str_c("DOWN",i), showCategory = 20)
+          print(dotplot)
+  }
+}
+```
+

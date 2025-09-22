@@ -1,0 +1,353 @@
+```{r setup, echo=F}
+library(tidyverse)
+library(pheatmap)
+library(DESeq2)
+library(AnnotationHub)
+library(msigdbr)
+library(limma)
+```
+
+```{r}
+ah <- AnnotationHub(localHub = FALSE)
+query(ah , c("Homo sapiens", "Ensembl", "EnsDb", "110"))
+edb <- ah[["AH113665"]]
+gns <- as.data.frame(genes(edb, return.type = "DataFrame")) %>% 
+  dplyr::select(gene_id, gene_name)
+rm(edb, ah)
+```
+
+
+#leggo matrice con conte normalizzate di DESeq2, seleziono solo campioni in normossia e filtro
+```{r}
+# NormCount_matrix_normoxia <- read.csv( file = "/media/alessio/Data/hypoxia/RNAseq/DESEQ2_NormCount_matrix_.csv") %>%
+#   left_join(gns, join_by(X == gene_id)) %>% 
+#   dplyr::filter(gene_name != "" & !duplicated(gene_name)) %>% 
+#   column_to_rownames("gene_name") %>% 
+#   dplyr::select(contains("normoxia"))
+
+VsdCount_matrix_normoxia <- read.csv( file = "/media/alessio/Data/hypoxia/RNAseq/DESEQ2_vsd_matrix_.csv") %>%
+  dplyr::filter(gene_name != "" & !duplicated(gene_name)) %>% 
+  column_to_rownames("gene_name") %>% 
+  dplyr::select(contains("normoxia"))
+```
+
+#prendo da msigdbr la lista di geni Hallmarks Interferon alpha
+```{r}
+Interferon_alpha_Hallmarks_genelist <- msigdbr(species = "Homo sapiens", category = "H") |> 
+  dplyr::select(gs_name, human_gene_symbol) |> 
+  dplyr::filter(gs_name == "HALLMARK_INTERFERON_ALPHA_RESPONSE") %>% 
+  dplyr::filter(!duplicated(human_gene_symbol)) %>% 
+  dplyr::select(human_gene_symbol) %>% 
+  unlist() %>% 
+  as.vector()
+```
+
+#applico Z-score su ogni riga del dataframe, uso le conte vsd per dirurre la varianza, filtro solo sui geni interferon
+```{r}
+# Z <- t(scale(t(VsdCount_matrix_normoxia))) %>% 
+#   na.omit() #altro modo per farlo
+
+Zscore_on_rows <- function(row) {
+  mean_value = mean(row)
+  sd_value = sd(row)
+  return((row - mean_value) / sd_value)
+}
+
+Zscore_matrix <- t(apply(VsdCount_matrix_normoxia, MARGIN = 1, Zscore_on_rows)) %>% 
+  na.omit()
+
+Zscore_matrix_Interferon_alpha <- Zscore_matrix %>% 
+  as.data.frame() %>% 
+  rownames_to_column("gene_name") %>% 
+  dplyr::filter(gene_name %in% Interferon_alpha_Hallmarks_genelist) %>% 
+  column_to_rownames("gene_name") %>% 
+  as.matrix()
+```
+
+#Heatmap
+```{r}
+library(ComplexHeatmap)
+sampleS <- data.frame(Clone = factor(c("Cas9", "Cas9", "Cas9", "Cas9", "H4KO cl125", "H4KO cl125", "H4KO cl26", "H4KO cl26" )))
+rownames(sampleS) <- colnames(Zscore_matrix_Interferon_alpha)
+
+my_palette <- colorRampPalette(c("blue", "white", "red"))(50)
+#breaks <- seq(-max(abs(Zscore_matrix_Interferon_alpha)), max(abs(Zscore_matrix_Interferon_alpha)), length.out = 51)
+
+
+pdf(file = "/media/alessio/Data/hypoxia/RNAseq/plot/Interefron_alpha_normoxia_Zscore.pdf", height = 20, width = 8)
+Heatmap_Interferon_alpha_Hallmarks_genelist <- Heatmap(
+  Zscore_matrix_Interferon_alpha,
+  top_annotation  = HeatmapAnnotation(Samples = sampleS$Clone),
+  col = my_palette,
+  name = "Z-score",
+  cluster_rows = TRUE,
+  cluster_columns = FALSE,
+  column_names_rot = 45,
+  column_title = "Interferon alpha",
+  row_title =  "Genes",
+  width = unit(8, "cm"),
+  height  = unit(40, "cm")
+  # cellwidth = 20,
+  # cellheight = 8,
+  #breaks = breaks
+  )
+ draw(Heatmap_Interferon_alpha_Hallmarks_genelist)
+dev.off()
+```
+
+
+
+
+#Devo fare dei plot su HDAC usando i dati delle mie SKUT1 (cas9), quelle del progetto di Eleonora, delle SKUT1 e delle SKN di TCGA
+```{r}
+#Carico i dati miei e di eleonora
+Count_matrix_normoxia_SKUT1_hypoxia <- read.csv( file = "/media/alessio/Data/hypoxia/RNAseq/Count_Tabs/DESeq2_NO_norm_counts.csv") %>%
+  dplyr::mutate(gene_id = str_remove(gene_id_version, "\\..*")) |> 
+  dplyr::select(-gene_id_version) |> 
+  left_join(gns, by = "gene_id") %>% 
+  dplyr::filter(gene_name != "" & !duplicated(gene_name)) %>% 
+  column_to_rownames("gene_name") %>% 
+  dplyr::select(c("R1CN",  "R2CN",  "R3CN",  "R4CN")) 
+
+Count_matrix_SKUT1_eleonora <- read.csv(file = "/media/alessio/Data/Eleonora_RNAseq_HUT_SKUT1/gene_count_matrix.csv") |>
+  separate_wider_delim(cols = gene_id, delim = "|", names = c("GENEID", "SYMBOL"), too_few = "align_start", cols_remove = T) %>%
+  dplyr::filter(SYMBOL != "" & !duplicated(SYMBOL)) %>%
+  column_to_rownames("SYMBOL") %>%
+  dplyr::select(contains("SC"))
+
+Count_matrix_HuT_eleonora <- read.csv(file = "/media/alessio/Data/Eleonora_RNAseq_HUT_SKUT1/gene_count_matrix.csv") |>
+  separate_wider_delim(cols = gene_id, delim = "|", names = c("GENEID", "SYMBOL"), too_few = "align_start", cols_remove = T) %>%
+  dplyr::filter(SYMBOL != "" & !duplicated(SYMBOL)) %>%
+  column_to_rownames("SYMBOL") %>%
+  dplyr::select(contains("UC"))
+```
+
+#dati di TCGA
+```{r}
+Sample_leio <- read_delim("/media/alessio/Data/Public_data_TCGA_ENCODE_cBioportal/Cancer_Type_Detailed.txt") #questo file scaricato da cBioportal
+ccle_RNAseq_genes_counts <- read_delim("/media/alessio/Data/Public_data_TCGA_ENCODE_cBioportal/CCLE_RNAseq_genes_counts_20180929.gct", skip = 2) #questo da BroadInstitute https://depmap.org/portal/data_page/?tab=allData
+
+Leio_ccle_RNAseq_genes_count <- ccle_RNAseq_genes_counts %>% 
+  dplyr::select(contains(Sample_leio$`Sample ID`), Name, Description) %>% 
+  dplyr::mutate(gene_id = str_replace(Name, "\\..*", "")) %>% 
+  left_join(gns, join_by(gene_id)) %>% 
+  dplyr::filter(gene_name != "" & !duplicated(gene_name)) %>% 
+  dplyr::select("gene_name", contains(c("RKN","SKLMS1","SKUT1"))) %>% 
+  pivot_longer(cols = c(contains("SOFT")), names_to = "Sample", values_to = "Counts")
+```
+
+#metto insieme tutte le tabelle creand un unica count matrix
+```{r}
+#prima converto le count matrix facendo la media dei replicati
+#SKUT1_hypoxia
+Count_matrix_normoxia_SKUT1_hypoxia_mean <- Count_matrix_normoxia_SKUT1_hypoxia %>% 
+  dplyr::mutate("SKUT1-Cas9" = round(rowMeans(across(everything())), digits = 0)) %>% 
+  rownames_to_column("gene_name") %>% 
+  dplyr::select("gene_name", contains('SKUT1')) %>% 
+  pivot_longer(cols = contains('SKUT1'), names_to = "Sample", values_to = "Counts")
+
+#SKUT1 eleonora
+Count_matrix_SKUT1_eleonora_mean <- Count_matrix_SKUT1_eleonora %>%
+  dplyr::mutate("SKUT1-WT" = round(rowMeans(across(everything())), digits = 0)) %>%
+  rownames_to_column("gene_name") %>%
+  dplyr::select("gene_name", "SKUT1-WT" ) %>%
+  pivot_longer(cols =  "SKUT1-WT" , names_to = "Sample", values_to = "Counts")
+
+Count_matrix_HuT_eleonora_mean <- Count_matrix_HuT_eleonora %>%
+  dplyr::mutate("HUtSMC" = round(rowMeans(across(everything())), digits = 0)) %>%
+  rownames_to_column("gene_name") %>%
+  dplyr::select("gene_name", "HUtSMC" ) %>%
+  pivot_longer(cols =  "HUtSMC" , names_to = "Sample", values_to = "Counts")
+
+
+#metto insieme tabelle
+Table_leio_cell_lines <- bind_rows(Leio_ccle_RNAseq_genes_count, 
+                                   Count_matrix_normoxia_SKUT1_hypoxia_mean, 
+                                   Count_matrix_SKUT1_eleonora_mean,
+                                   Count_matrix_HuT_eleonora_mean
+                                   ) %>% 
+  pivot_wider(names_from = Sample, values_from = Counts) %>% 
+  column_to_rownames("gene_name") %>% 
+  dplyr::rename_with(~str_remove(., "_SOFT_TISSUE")) %>% #tolgo soft tissue dal nome
+  na.omit()
+```
+
+#normalizzazione CPM (prima avevo usato questa)
+```{r}
+library(edgeR)
+#normalizzazione CPM
+Table_leio_cell_lines_normalized <- DGEList(counts = Table_leio_cell_lines) %>% 
+  cpm() %>% 
+  round(digits = 0)
+```
+
+#normalizzazione DESeq2
+
+```{r}
+library(DESeq2)
+dds <- DESeqDataSetFromMatrix(countData = Table_leio_cell_lines, colData = data.frame(sample = colnames(Table_leio_cell_lines)), design = ~ 1)
+dds <- DESeq(dds)
+
+Table_leio_cell_lines_DESeq_norm <- counts(dds, normalized = T)
+Table_leio_cell_lines_DESeq_vst <- assay(vst(dds))
+```
+
+#Z-score
+```{r}
+Zscore_on_rows <- function(row) {
+  mean_value = mean(row)
+  sd_value = sd(row)
+  return((row - mean_value) / sd_value)
+}
+
+#creo anche la stessa tabella con lo Z-score
+Table_leio_cell_lines_Z_score <- t(apply(Table_leio_cell_lines_normalized, MARGIN = 1, Zscore_on_rows)) %>% 
+  na.omit()
+```
+
+#plotto le HDACs 
+```{r}
+HDACs_2_MEF <- c(str_c("HDAC", c(4,5,7,9)), "MEF2A", "MEF2C", "MEF2D")
+
+HDACs_Table_leio_cell_lines_DESeq_norm <- as.data.frame(Table_leio_cell_lines_DESeq_norm) %>% 
+  rownames_to_column("gene_name") %>% 
+  dplyr::filter(gene_name %in% HDACs_2_MEF) %>% 
+  dplyr::mutate(hdac_number = as.numeric(str_extract(gene_name, "\\d+"))) %>%  # Extract numeric part of HDAC
+  dplyr::mutate(hdac_number = ifelse(str_detect(gene_name, "HDAC"), hdac_number, 100)) |> 
+  dplyr::arrange(hdac_number) %>%  # Sort by the extracted numeric part
+  dplyr::select(-hdac_number) %>% 
+  column_to_rownames("gene_name") %>% 
+  as.matrix()
+
+HDACs_Table_leio_cell_lines_DESeq_vst <- as.data.frame(Table_leio_cell_lines_DESeq_vst) %>% 
+  rownames_to_column("gene_name") %>% 
+  dplyr::filter(gene_name %in% HDACs_2_MEF) %>% 
+  dplyr::mutate(hdac_number = as.numeric(str_extract(gene_name, "\\d+"))) %>%  # Extract numeric part of HDAC
+  dplyr::mutate(hdac_number = ifelse(str_detect(gene_name, "HDAC"), hdac_number, 100)) |> 
+  dplyr::arrange(hdac_number) %>%  # Sort by the extracted numeric part
+  dplyr::select(-hdac_number) %>% 
+  column_to_rownames("gene_name") %>% 
+  as.matrix()
+
+
+X <- list(normalized_counts = HDACs_Table_leio_cell_lines_DESeq_norm, vst_counts = HDACs_Table_leio_cell_lines_DESeq_vst)
+X <- lapply(X, function(df) {
+  dfx <- df |> as.data.frame() |> rownames_to_column("gene")
+})
+
+openxlsx::write.xlsx(X, file = "MEF_HDACs_Table_Leio_counts.xlsx")
+
+library(ComplexHeatmap)
+
+pdf(file = "/media/alessio/Data/hypoxia/RNAseq/plot/HDACs_MEF_leio_vsd.pdf", height = 10, width = 6)
+Heatmap_HDACs_leio <- Heatmap(
+  HDACs_Table_leio_cell_lines_DESeq_vst,
+  col = c("white", "darkblue"),
+  rect_gp = gpar(col = "white", lwd = 0.5),
+  name = "VSD",
+  cluster_rows = F,
+  cluster_columns = TRUE,
+  column_names_rot = 45,
+  column_title = "HDACs expression",
+  row_title =  "Genes",
+  width = unit(6, "cm"),
+  height  = unit(10, "cm"),
+  # cellwidth = 20,
+  # cellheight = 8,
+  #breaks = breaks
+  )
+draw(Heatmap_HDACs_leio)
+dev.off()
+Heatmap_HDACs_leio
+```
+
+#plotto le HDACs(Z-score)
+```{r}
+HDACs_Table_leio_cell_lines_normalized_Z_score <- as.data.frame(Table_leio_cell_lines_Z_score) %>% 
+  rownames_to_column("gene_name") %>% 
+  dplyr::filter(gene_name %in% HDACs) %>% 
+  dplyr::mutate(hdac_number = as.numeric(str_extract(gene_name, "\\d+"))) %>%  # Extract numeric part of HDAC
+  dplyr::arrange(hdac_number) %>%  # Sort by the extracted numeric part
+  dplyr::select(-hdac_number) %>% 
+  column_to_rownames("gene_name") %>% 
+  as.matrix()
+
+
+Heatmap_HDACs_leio_Z_score <- Heatmap(
+  HDACs_Table_leio_cell_lines_normalized_Z_score,
+  col = c("darkblue", "white", "darkred"),
+  name = "Z-score",
+  cluster_rows = F,
+  cluster_columns = TRUE,
+  column_names_rot = 45,
+  column_title = "HDACs expression",
+  row_title =  "Genes",
+  width = unit(6, "cm"),
+  height  = unit(10, "cm"),
+  # cellwidth = 20,
+  # cellheight = 8,
+  #breaks = breaks
+  )
+
+Heatmap_HDACs_leio_Z_score
+```
+
+
+#Vedo anche hypoxia signature
+```{r}
+genelist_hypoxia <- c("ALDOA", "ANGPTL4", "ANLN", "BNC1", "MRGBP", "CA9","CDKN3", "COL4A6", "DCBLD1", "ENO1", "FAM83B", "FOSL1", "GNAI1", "HILPDA", "KCTD11", "KRT17", "LDHA", "MRPS17", "P4HA1", "PGAM1", "PGK1", "SDC1", "SLC16A1", "SLC2A1", "TPI1", "VEGFA")
+
+library(msigdbr)
+genelist_hypoxia_msigdb <- msigdbr(species = "Homo sapiens", category = "H") |> 
+  dplyr::filter(gs_name == "HALLMARK_HYPOXIA") |> 
+  dplyr::select(human_gene_symbol)
+genelist_hypoxia_msigdb <- genelist_hypoxia_msigdb$human_gene_symbol
+
+Hypoxia_Table_leio_cell_lines_Z_score <- as.data.frame(Table_leio_cell_lines_Z_score) %>% 
+  rownames_to_column("gene_name") %>% 
+  dplyr::filter(gene_name %in% genelist_hypoxia_msigdb) %>% 
+  column_to_rownames("gene_name") %>% 
+  as.matrix()
+
+Heatmap_hypoxia_leio <- Heatmap(
+  Hypoxia_Table_leio_cell_lines_Z_score,
+  col = c("darkblue", "white", "darkred"),
+  name = "Z-score",
+  cluster_rows = TRUE,
+  cluster_columns = TRUE,
+  column_names_rot = 45,
+  column_title = "hypoxia genes expression",
+  row_title =  "Genes",
+  width = unit(6, "cm"),
+  height  = unit(20, "cm"),
+  # cellwidth = 20,
+  # cellheight = 8,
+  #breaks = breaks
+  )
+Heatmap_hypoxia_leio
+```
+
+
+#PCA (per provare)
+```{r}
+library(factoextra)
+library(clusterSim)
+library(stats)
+library(plotly)
+library(ggfortify)
+
+Table_leio_cell_lines_normalized_renormalizedbyclusterSim <- data.Normalization(t(as.matrix(Table_leio_cell_lines_normalized)), type="n1", normalization="columns")
+
+distances <- dist(Table_leio_cell_lines_normalized_renormalizedbyclusterSim) 
+
+mds1 <- cmdscale(distances, k=2) %>% 
+  as.data.frame() %>% 
+  dplyr::rename(PC1 = V1, PC2 = V2) %>% 
+  rownames_to_column("Leio_Cell_line")
+
+PCA_Leio <- ggplot(mds1, aes(x = PC1, y = PC2, color = Leio_Cell_line)) +
+  geom_point() +
+  theme_bw() +
+  geom_text(aes(label = Leio_Cell_line), vjust = 1.5, hjust = 0, size = 3)
+```
+

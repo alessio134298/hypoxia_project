@@ -1,0 +1,237 @@
+
+```{r setup, echo = F}
+library(tidyverse)
+library(DESeq2)
+library(clusterProfiler)
+library(tximeta)
+library(AnnotationHub)
+library(msigdbr)
+library(enrichplot)
+library(ggpubr)
+
+
+#Genes object
+ah <- AnnotationHub(localHub = FALSE)
+query(ah , c("Homo sapiens", "Ensembl","EnsDb", "110"))
+edb <- ah[["AH113665"]]
+gns <- as.data.frame(genes(edb, return.type = "DataFrame")) 
+rm(edb, ah)
+
+gns_geneidversion_symbol_entrexid <- gns %>% 
+  dplyr::select(gene_id_version, symbol, entrezid)
+
+gns_geneidversion_symbol <- gns %>% 
+  dplyr::select(gene_id_version, symbol)
+```
+
+#Lettura coldata
+```{r}
+coldata <- read_csv("Experiment.csv")
+coldata <- read_csv("Experiment_oldcl26.csv") #vecchio H4KO cl26
+```
+
+
+#TXIMETA
+```{r, echo = F}
+#tximeta import
+Hypoxia_se <- tximeta(coldata = coldata)
+
+#summarize to gene
+Hypoxia_se_summarized_to_genes <- summarizeToGene(Hypoxia_se)
+```
+
+#DESEQ2
+```{r}
+dds <- DESeqDataSet(Hypoxia_se_summarized_to_genes,
+                    design = ~ clone + time + time:clone)
+
+smallestGroupSize <- 2
+keep <- rowSums(counts(dds) >= 10) >= smallestGroupSize
+dds <- dds[keep,]
+
+dds <- DESeq(dds)
+
+dds$time  <- relevel(dds$time,"0h")
+dds$clone <- relevel(dds$clone,"Cas9")
+```
+
+#TRASFORM & PCA
+```{r}
+vsd <- vst(dds,  blind=FALSE)
+
+pcaData <- plotPCA(vsd, intgroup =c("clone", "time"), returnData = T)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+PCA_allsamples <- ggplot(pcaData, aes(PC1, PC2, fill = clone, shape = time)) +
+  geom_point(size = 5) +
+  scale_shape_manual(values = c(21L, 22L, 23L, 24L)) +
+  scale_fill_manual(values = c("#854ddc", "#FF007F", "#FF007F")) +
+ # geom_text(aes(label = group), size = 3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  guides(fill = guide_legend(override.aes = list(shape=21))) +
+  coord_fixed() +
+  theme_bw()
+
+PCA_allsamples
+```
+
+```{r}
+# assume dds is already fitted with design = ~ time * clone and DESeq() run
+resultsNames(dds)  # confirm names
+
+DESEq2_results_sep_clones_H4KO_vs_Cas9 <- list(
+    res_cl125_0h  = results(dds, name = "clone_H4KO_cl125_vs_Cas9"),
+    res_cl125_6h  = results(dds, contrast = list(
+                        c("clone_H4KO_cl125_vs_Cas9","cloneH4KO_cl125.time6h")
+                    )),
+    res_cl125_24h = results(dds, contrast = list(
+                        c("clone_H4KO_cl125_vs_Cas9","cloneH4KO_cl125.time24h")
+                    )),
+    res_cl125_48h = results(dds, contrast = list(
+                        c("clone_H4KO_cl125_vs_Cas9","cloneH4KO_cl125.time48h")
+                    )),
+    res_cl26_0h = results(dds, name = "clone_H4KO_cl26_vs_Cas9"),
+    res_cl26_6h = results(dds, contrast = list(
+                        c("clone_H4KO_cl26_vs_Cas9","cloneH4KO_cl26.time6h")
+                    )),
+    res_cl26_24h = results(dds, contrast = list(
+                        c("clone_H4KO_cl26_vs_Cas9","cloneH4KO_cl26.time24h")
+                    )),
+    res_cl26_48h = results(dds, contrast = list(
+                        c("clone_H4KO_cl26_vs_Cas9","cloneH4KO_cl26.time48h")
+                    ))
+) %>%
+  enframe(name = "Comparison", #nested
+          value = "Results") %>% 
+  dplyr::mutate(Results = map(Results, \(x) as.data.frame(x) %>% 
+                                dplyr::mutate(Dexpr = case_when(
+                                  (log2FoldChange > 0.75 & padj < 0.05) ~ "UP",
+                                  (log2FoldChange < -0.75 & padj < 0.05) ~ "DOWN",
+                                  TRUE ~ "ns"
+                                )
+                                ) %>%
+                                rownames_to_column("gene_id_version") %>% 
+                                left_join(gns_geneidversion_symbol_entrexid, by = "gene_id_version")
+                              
+  )
+  )
+```
+
+
+#Summary dei risultati
+```{r}
+Summary_Dexpr_sep_clones <- DESEq2_results_sep_clones_H4KO_vs_Cas9 %>% 
+  dplyr::mutate(Count_Dexpr = map(Results, \(x) x %>% 
+                                    group_by(Dexpr) %>% 
+                                    summarize(Count = n()) %>% 
+                                    dplyr::filter(Dexpr != "ns"))
+  ) %>% 
+  dplyr::select(!Results) %>% 
+  unnest(Count_Dexpr)
+
+Summary_Dexpr_sep_clones
+```
+
+
+
+```{r}
+#estraggo up e down
+DEXPR_DESEq2_results_sep_clones_H4KO_vs_Cas9 <- DESEq2_results_sep_clones_H4KO_vs_Cas9 %>% 
+  dplyr::mutate(UP = map(Results, \(x) dplyr::filter(x, Dexpr == "UP") %>% #estraggo gli Up e down symbol
+                           dplyr::select(symbol) %>% unlist()), #prima era gene id version per i plot
+                DOWN = map(Results, \(x) dplyr::filter(x, Dexpr == "DOWN") %>% 
+                           dplyr::select(symbol) %>% unlist())) %>% 
+  dplyr::select(!Results) %>% 
+  dplyr::mutate(time = case_when(
+    str_detect(Comparison, '0h') ~ '0h',
+    str_detect(Comparison, '6h') ~ '6h',
+    str_detect(Comparison, '24h') ~ '24h',
+    str_detect(Comparison, '48h') ~ '48h'
+  )) %>% #definisco le variabili per raggruppare
+  dplyr::mutate(clone = ifelse(str_detect(Comparison, "125"), "cl125", "cl26"))
+  
+
+#UPregolati
+UP <- DEXPR_DESEq2_results_sep_clones_H4KO_vs_Cas9 %>%
+  dplyr::select(-DOWN) %>% 
+  unnest(UP) %>% 
+  group_by(time) %>%
+  summarize(
+    UP_shared_genes = list(
+      intersect(
+        UP[clone == "cl125"],
+        UP[clone == "cl26"]
+      )),
+    UP_only125_genes = list(
+      setdiff(
+        UP[clone == "cl125"],
+        UP[clone == "cl26"]
+      )),
+    UP_only26_genes = list(
+      setdiff(
+        UP[clone == "cl26"],
+        UP[clone == "cl125"]
+      )),
+  )
+
+#DOWNregolati
+DOWN <- DEXPR_DESEq2_results_sep_clones_H4KO_vs_Cas9 %>%
+  dplyr::select(-UP) %>% 
+  unnest(DOWN) %>% 
+  group_by(time) %>%
+  summarize(
+    DOWN_shared_genes = list(
+      intersect(
+        DOWN[clone == "cl125"],
+        DOWN[clone == "cl26"]
+      )),
+    DOWN_only125_genes = list(
+      setdiff(
+        DOWN[clone == "cl125"],
+        DOWN[clone == "cl26"]
+      )),
+    DOWN_only26_genes = list(
+      setdiff(
+        DOWN[clone == "cl26"],
+        DOWN[clone == "cl125"]
+      )),
+  )
+
+UP
+DOWN
+```
+
+#save
+```{r}
+list("Up_common_genes" = UP[[2]][[1]],
+       "Down_common_genes" = DOWN[[2]][[1]]) %>% 
+  openxlsx::write.xlsx(file = "Tab_files/Upreg_common_normoxia_newclones.xlsx")
+
+list("Up_common_genes" = UP[[2]][[1]],
+       "Down_common_genes" = DOWN[[2]][[1]]) %>% 
+  openxlsx::write.xlsx(file = "Tab_files/Upreg_common_normoxia_oldclones.xlsx")
+```
+
+# Give a try to dorothea + VIPER
+```{r}
+library(dorothea)   # DoRothEA regulons + helper functions
+library(viper)      # VIPER algorithm; dorothea provides a wrapper
+
+vsd <- vst(dds, blind=TRUE)        
+expr <- assay(vsd) |> as.data.frame() |> dplyr::select(contains("N"))                 
+expr <- expr |> 
+    rownames_to_column('gene_id_version') |> 
+    left_join(gns_geneidversion_symbol, by = 'gene_id_version') |> 
+    dplyr::filter(!duplicated(symbol) & !is.na(symbol)) |> 
+    dplyr::select(!gene_id_version) |> 
+    column_to_rownames("symbol")
+
+
+# load human regulons (dorothea_hs) and keep high-confidence interactions
+data(dorothea_hs, package="dorothea")
+regulons_tab <- dorothea_hs %>% dplyr::filter(confidence %in% c("A","B","C"))
+
+viper_res <- run_viper(expr, regulons_tab, tidy = FALSE, assay_key = "RNA") |> as.data.frame() |> rownames_to_column('TF')
+# viper_res is a TF x sample matrix of activity scores (normalized enrichment scores)
+```

@@ -7,11 +7,7 @@ library(ComplexHeatmap)
 library(colorRamp2)
 
 
-# id_symbol <- read_delim('/media/alessio/Data/genome110/ID_SYMBOL_converter.csv') |> 
-#   dplyr::select(gene_id_version, symbol)
-
-
-id_symbol <- read_delim('../RNAseq/Count_Tabs/DESeq2_VSD_symb.csv') |> 
+id_symbol <- read_delim('/media/alessio/Data/genome110/ID_SYMBOL_converter.csv') |> 
   dplyr::select(gene_id_version, symbol)
 ```
 
@@ -70,6 +66,11 @@ VSD |> write_csv('VSD_normoxia_newsamples.csv')
 H4KO_Vs_Cas9_norm_Up %>% write_csv("Upreg_normoxia_H4KO_vs_ctrl_salmon.csv")
 H4KO_Vs_Cas9_norm_Down %>% write_csv("Downreg_normoxia_H4KO_vs_ctrl_salmon.csv")
 ```
+
+###############################################################
+# Just to send emanuele the shared genes between the two clones
+###############################################################
+
 
 ################################################
 ################################################
@@ -132,6 +133,17 @@ Genes_UP_H4KO_vs_Cas9_norm <- na.omit(Genes_UP_H4KO_vs_Cas9_norm$symbol)
 
 Genes_DOWN_H4KO_vs_Cas9_norm <- read_csv("Downreg_normoxia_H4KO_vs_ctrl_salmon.csv")
 Genes_DOWN_H4KO_vs_Cas9_norm <- na.omit(Genes_DOWN_H4KO_vs_Cas9_norm$symbol)
+```
+
+# In alternative we can use the differentials of the overlap between the two clones
+```{r}
+Genes_UP_H4KO_vs_Cas9_norm <- openxlsx::read.xlsx("../RNAseq/Tab_files/Upreg_common_normoxia_newclones.xlsx", sheet = 1, colNames = F)
+Genes_UP_H4KO_vs_Cas9_norm <- na.omit(Genes_UP_H4KO_vs_Cas9_norm$X1)
+Genes_UP_H4KO_vs_Cas9_norm <- Genes_UP_H4KO_vs_Cas9_norm[Genes_UP_H4KO_vs_Cas9_norm != ""]
+
+Genes_DOWN_H4KO_vs_Cas9_norm <- openxlsx::read.xlsx("../RNAseq/Tab_files/Upreg_common_normoxia_newclones.xlsx", sheet = 2, colNames = F)
+Genes_DOWN_H4KO_vs_Cas9_norm <- na.omit(Genes_DOWN_H4KO_vs_Cas9_norm$X1)
+Genes_DOWN_H4KO_vs_Cas9_norm <- Genes_DOWN_H4KO_vs_Cas9_norm[Genes_DOWN_H4KO_vs_Cas9_norm != ""]
 ```
 
 # DBRs genes
@@ -596,6 +608,13 @@ for (i in names(core_genes_list)) {
 df_Chip <- Acetylation_signal_list$Acetylation_Up_shared_DBR_promoter
 df_Vsd <- VSD_groups_list$VSD_Up_shared_DBR_promoter
 
+# this for reorder correctly the rows
+common_genes <- intersect(rownames(df_Vsd), rownames(df_Chip))
+df_Vsd  <- df_Vsd[common_genes, , drop = FALSE]
+df_Chip <- df_Chip[common_genes, , drop = FALSE]
+
+par(bg=NA)
+
 Core_Genes_Hmap_VSD_promoter <- Heatmap(matrix = df_Vsd,
         cluster_columns = F,
         name = "VSD",
@@ -671,9 +690,21 @@ Hmap_promoter <- Core_Genes_Hmap_VSD_promoter +
   MEF2D_mini_Hmap +
   MEF2D_distal_mini_Hmap
 
-pdf(file = "Heatmap_Promoter.pdf", height = 12, width = 8)
-Hmap_promoter
+png("Heatmap_Promoter.png", width = 22, height = 24, units = "cm", res = 600, bg = "transparent")
+draw(Hmap_promoter, background = NA)
 dev.off()
 
 Hmap_promoter
+```
+
+# NFIB HDAC4 promoter motifs
+```{r}
+library(GenomicRanges)
+
+NFIB_promoter <- Table_Signal_Bw_TSS %>% dplyr::filter(symbol == "NFIB") %>% makeGRangesFromDataFrame()
+
+HDAC4_peak_on_NFIB <- subsetByOverlaps(HDAC4_peaks, NFIB_promoter)
+
+# convert to bed
+HDAC4_peak_on_NFIB %>% as.data.frame() %>% dplyr::select(seqnames, start, end) %>% write_delim('HDAC4_on_NFIB_promoter.bed', col_names = F, delim='\t')
 ```

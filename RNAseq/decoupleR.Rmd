@@ -1,0 +1,180 @@
+```{r setup, echo = FALSE}
+library(decoupleR)
+library(dplyr)
+library(tibble)
+library(tidyr)
+library(ggplot2)
+library(pheatmap)
+library(ggrepel)
+library(ComplexHeatmap)
+```
+
+###########################
+#Pathway activity inference
+###########################
+
+#retrieving path from Progeny
+```{r}
+net <- get_progeny(organism = 'human', top = 500)
+```
+
+```{r}
+gns_geneidversion_symbol <- gns %>% 
+  dplyr::select(gene_id_version, symbol)
+
+#carico Conte e trasformo in un dataframe utilizzabile per plottare
+Norm_counts <- read_csv("DESeq2_norm_counts.csv") %>% 
+  left_join(gns_geneidversion_symbol, by = "gene_id_version") %>% 
+  dplyr::select(-gene_id_version) %>% 
+  dplyr::filter(!is.na(symbol) & !duplicated(symbol)) %>% 
+  column_to_rownames("symbol") %>% 
+  as.matrix()
+```
+
+#Faccio una matrice con la media dei replicati
+```{r}
+Reps_coldata <- coldata %>% 
+  dplyr::mutate(Rep = ifelse(type == "Cas9", rep(c("_1","_2")) , "")) %>% 
+  dplyr::mutate(clone_time_rep = str_c(clone_time, Rep)) 
+
+Norm_counts_meanrep <- Norm_counts %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "symbol") %>% 
+  pivot_longer(cols = starts_with("R"), names_to = "names", values_to = "counts") %>% 
+  left_join(Reps_coldata, by = "names") %>% 
+  dplyr::select(symbol, clone_time_rep, counts) %>% 
+  group_by(clone_time_rep, symbol) %>% 
+  summarize(mean = mean(counts)) %>% 
+  pivot_wider(names_from = clone_time_rep, values_from = mean) %>% 
+  column_to_rownames("symbol") %>% 
+  as.matrix()
+```
+
+#Activity inference with Multivariate linear model
+```{r}
+sample_acts_merged_reps <- run_mlm(mat=Norm_counts_meanrep, network = net, .source='source', .target='target',
+                  .mor='weight', minsize = 5)
+```
+
+#plot Heatmap
+```{r}
+sample_acts_mat_merged_reps <- sample_acts_merged_reps %>%
+  pivot_wider(id_cols = 'condition', names_from = 'source',
+              values_from = 'score') %>%
+  column_to_rownames('condition') %>%
+  as.matrix()
+
+# Scale per sample
+sample_acts_mat_merged_reps <- scale(sample_acts_mat_merged_reps)
+
+row_order <- c("Cas9_0h_1", "Cas9_0h_2",
+               "Cas9_6h_1", "Cas9_6h_2",
+               "Cas9_24h_1", "Cas9_24h_2",
+               "Cas9_48h_1", "Cas9_48h_2",
+               "H4KO_cl125_0h", "H4KO_cl26_0h",
+               "H4KO_cl125_6h", "H4KO_cl26_6h",
+               "H4KO_cl125_24h", "H4KO_cl26_24h",
+               "H4KO_cl125_48h", "H4KO_cl26_48h")
+
+
+#pdf(file = "plot/decoupleR_heatmap_mlm.pdf", height = 6, width = 8)
+Heatmap(sample_acts_mat_merged_reps[row_order, ],
+        col = circlize::colorRamp2(c(-3, 0, 3), c("darkblue", "white", "darkred")),
+        name = "Z score",
+        rect_gp = gpar(col = "black", lwd = 0.5),
+        cluster_rows = F,
+        column_title = "decoupleR pathways activity"
+        )
+#dev.off()
+```
+
+```{r}
+VEGF_pathway_genes <- net %>% 
+  dplyr::filter(source == "VEGF") %>% 
+  write_csv("Ominpath_Top_500_genes_VEGFA_pathway.csv")
+
+hypoxia_pathway_genes <- net %>% 
+  dplyr::filter(source == "Hypoxia") %>% 
+  write_csv("Ominpath_Top_500_genes_hypoxia_pathway.csv")
+```
+
+
+########################################
+#Transcription factor activity inference
+########################################
+
+#Carico DESeq2 results e le conte normalizzate
+```{r}
+library(readxl)     
+multiplesheets <- function(fname) { 
+   
+  # getting info about all excel sheets 
+  sheets <- readxl::excel_sheets(fname) 
+  tibble <- lapply(sheets, function(x) readxl::read_excel(fname, sheet = x)) 
+  data_frame <- lapply(tibble, as.data.frame) 
+    
+  # assigning names to data frames 
+  names(data_frame) <- sheets 
+} 
+
+DESeq2_results_Vs_normoxia_sep_clones <- multiplesheets("Tab_files/DESeq2_Results_Sep_clones_Vs_normoxia.xlsx")
+```
+
+#CollecTRI network
+```{r}
+net <- get_collectri(organism='human', split_complexes=FALSE)
+```
+
+
+```{r}
+sample_acts <- run_ulm(mat = Norm_counts_meanrep, network = net, .source ='source', .target = 'target', .mor = 'mor', minsize = 5)
+```
+
+#Visualization
+```{r}
+n_tfs <- 25
+
+# Transform to wide matrix
+sample_acts_mat <- sample_acts %>%
+  pivot_wider(id_cols = 'condition', names_from = 'source',
+              values_from = 'score') %>%
+  column_to_rownames('condition') %>%
+  as.matrix()
+
+# Get top tfs with more variable means across clusters
+tfs <- sample_acts %>%
+  group_by(source) %>%
+  summarise(std = sd(score)) %>%
+  arrange(-abs(std)) %>%
+  head(n_tfs) %>%
+  pull(source)
+
+HIFs <- c("HIF1A", "EPAS1", "HIF3A")
+
+sample_acts_mat <- sample_acts_mat[,HIFs]
+
+
+
+# Scale per sample
+sample_acts_mat <- scale(sample_acts_mat)
+
+row_order <- c("Cas9_0h_1", "Cas9_0h_2",
+               "Cas9_6h_1", "Cas9_6h_2",
+               "Cas9_24h_1", "Cas9_24h_2",
+               "Cas9_48h_1", "Cas9_48h_2",
+               "H4KO_cl125_0h", "H4KO_cl26_0h",
+               "H4KO_cl125_6h", "H4KO_cl26_6h",
+               "H4KO_cl125_24h", "H4KO_cl26_24h",
+               "H4KO_cl125_48h", "H4KO_cl26_48h")
+
+
+#pdf(file = "plot/decoupleR_heatmap_mlm.pdf", height = 6, width = 8)
+Heatmap(sample_acts_mat[row_order, ],
+        col = circlize::colorRamp2(c(-3, 0, 3), c("darkblue", "white", "darkred")),
+        name = "Z score",
+        rect_gp = gpar(col = "black", lwd = 0.5),
+        cluster_rows = F,
+        column_title = "decoupleR pathways activity"
+        )
+```
+
