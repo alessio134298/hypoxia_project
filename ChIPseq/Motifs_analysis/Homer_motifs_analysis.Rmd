@@ -1,0 +1,205 @@
+```{r setup}
+library(tidyverse)
+library(gridExtra)
+library(mmtable2)
+library(grid)
+```
+
+#Homer output files analysis (quelli utilizzando gli output di DiffBind filtrati sui promotori)
+```{r}
+paths <- c(
+  "H3K27ac.Cas9.H24.vs.normoxia" = "Homer_motifs/H3K27ac/DiffBind_Cas9_24_vs_Cas9_normoxia_findMotifsGenome_output_given/knownResults.txt",
+  "H3K27ac.H4KO.H24.vs.normoxia" = "Homer_motifs/H3K27ac/DiffBind_H4KO_24_vs_H4KO_normoxia_findMotifsGenome_output_given/knownResults.txt",
+  "H3K27ac.H4KO.vs.Cas9.H24" = "Homer_motifs/H3K27ac/DiffBind_H4KO_vs_Cas9_H24_findMotifsGenome_output_given/knownResults.txt",
+  "H3K27ac.H4KO.vs.Cas9.normoxia" = "Homer_motifs/H3K27ac/DiffBind_H4KO_vs_Cas9_normoxia_findMotifsGenome_output_given/knownResults.txt",
+  "H2BK120ac.Cas9.H24.vs.normoxia" = "Homer_motifs/H2BK120ac/DiffBind_Cas9_24_vs_Cas9_normoxia_findMotifsGenome_output_given/knownResults.txt",
+  "H2BK120ac.H4KO.H24.vs.normoxia" = "Homer_motifs/H2BK120ac/DiffBind_H4KO_24_vs_H4KO_normoxia_findMotifsGenome_output_given/knownResults.txt",
+  "H2BK120ac.H4KO.vs.Cas9.H24" = "Homer_motifs/H2BK120ac/DiffBind_H4KO_vs_Cas9_H24_findMotifsGenome_output_given/knownResults.txt",
+  "H2BK120ac.H4KO.vs.Cas9.normoxia" = "Homer_motifs/H2BK120ac/DiffBind_H4KO_vs_Cas9_normoxia_findMotifsGenome_output_given/knownResults.txt"
+)
+
+colNamesD <- c(
+  "Motif",
+  "Consensus",
+  "pvalue",
+  "logPvalue",
+  "q.value(BH)",
+  "Number_of_target_sequence",
+  "Percentage_of_target_sequence",
+  "Number_of_background_sequence",
+  "Percentage_of_background_sequence"
+)
+
+
+DiffBind.Motif.result <- tibble()
+
+for (i in names(paths)) {
+  DiffBind.Motif.result <- read.delim(paths[[i]], col.names = colNamesD) |>
+    as_tibble() |>
+    # mutate(Comparison = str_replace(i, "\\.", ":")) |>
+    # separate_wider_delim(cols = Comparison, delim = ":", names = c("Marker", "Comparison")) |>
+    mutate(Comparison = i) |>
+    separate_wider_delim(
+      cols = Comparison,
+      delim = ".",
+      too_many = "merge",
+      names = c("Marker", "Comparison")
+    ) |>
+    dplyr::mutate(Sign = ifelse(pvalue <= 0.01, "Yes", "No")) |>
+    dplyr::select(Marker, Comparison, Motif, Consensus, pvalue, Sign) |>
+    bind_rows(DiffBind.Motif.result)
+  
+  print(DiffBind.Motif.result)
+}
+
+```
+
+#nest
+```{r}
+DiffBind.Motif.result.df.tidy <- DiffBind.Motif.result |>
+  group_by(Marker, Comparison) |>
+  nest() |>
+  dplyr::mutate(filtered = map(
+    data,
+    ~ .x |>
+      dplyr::filter(str_detect(Motif, "HIF")) |>
+      dplyr::mutate(Motif = str_extract(Motif, "^[^(]+")) |> 
+  ungroup()
+  ))
+```
+
+#salvo il risultato come tabella
+```{r}
+save.table <- function(marker) {
+  png(
+    filename = paste0(
+      "/media/alessio/Data/hypoxia/ChIPseq/plot/",
+      marker,
+      "_HIF1-a_motif_summary_given.png"
+    ),
+    units = "cm",
+    res = 300,
+    height = 15,
+    width = 20
+  )
+  p <- tableGrob(
+    DiffBind.Motif.result.df.tidy |>
+      select(-data) |>
+      unnest(filtered) |>
+      dplyr::filter(Marker == marker) |> 
+      dplyr::arrange(Motif),
+    rows = NULL
+  )
+  grid.arrange(p)
+  dev.off()
+}
+
+save.table("H3K27ac")
+save.table("H2BK120ac")
+```
+
+
+#creo un file bed dall'annotazioone di Homer sulle regioni genomiche con motivi di HIF-1a
+```{r}
+HIF1a <- read.delim("Homer_motifs/HIF-1a.txt") |> 
+  dplyr::select(2:6) |> 
+  dplyr::arrange(Chr)
+
+write_delim(HIF1a, file = "Homer_motifs/HIF-1a.bed", col_names = F, quote = "none", delim = "\t")
+```
+
+
+
+
+
+
+#.###############################################################
+#Motivi su picchi di ATAC e HDAC4 sui SEs (risultati di DiffBind)
+#.###############################################################
+
+```{r}
+#creo una lista con i file
+path_H3 = "/media/alessio/Data/hypoxia/ChIPseq/Motifs_analysis/Homer_motifs/H3K27ac"
+path_H2 = "/media/alessio/Data/hypoxia/ChIPseq/Motifs_analysis/Homer_motifs/H2BK120ac"
+path_com = "/media/alessio/Data/hypoxia/ChIPseq/Motifs_analysis/Homer_motifs"
+
+dirs_H3 = list.files(path_H3, pattern = "SEs", full.names = T)
+dirs_H2 = list.files(path_H2, pattern = "SEs", full.names = T)
+dirs_com = list.files(path_com, pattern = "SEs", full.names = T)
+
+namefile = "knownResults.txt"
+
+files = c(file.path(dirs_H3,namefile),file.path(dirs_H2,namefile),file.path(dirs_com,namefile))
+
+#nomi delle colonne dei file (devo riassegnarli)
+colNamesD <- c(
+  "Motif",
+  "Consensus",
+  "pvalue",
+  "logPvalue",
+  "q.value(BH)",
+  "Number_of_target_sequence",
+  "Percentage_of_target_sequence",
+  "Number_of_background_sequence",
+  "Percentage_of_background_sequence"
+)
+
+#creo la tabella
+Motifs_result_ATAC_HDAC4_on_SEs <- tibble()
+
+for (i in files) {
+  
+  namex = dirname(i) %>%
+    basename %>%
+    str_remove(., "_findMotifsGenome")
+  
+  tmp.df <- read.delim(i, col.names = colNamesD) %>% 
+    dplyr::mutate(Sample = namex, HDAC4_or_ATAC = ifelse(str_detect(namex, "HDAC4"), "HDAC4", "ATAC")) %>% 
+    dplyr::mutate(Sign = ifelse(pvalue <= 0.01, "Yes", "No")) %>% 
+    dplyr::select(HDAC4_or_ATAC, Sample, Motif, Consensus, pvalue, Sign)
+  
+  Motifs_result_ATAC_HDAC4_on_SEs <- bind_rows(Motifs_result_ATAC_HDAC4_on_SEs, tmp.df)
+}
+```
+
+#nest
+```{r}
+Motifs_result_ATAC_HDAC4_on_SEs_nested <- Motifs_result_ATAC_HDAC4_on_SEs %>% 
+  nest(.by = c(HDAC4_or_ATAC, Sample)) %>% 
+    dplyr::mutate(Sample = str_remove_all(Sample, "HDAC4_peaks_on_|SKUT_atac_consensus_peaks_on_|_vs_Cas9") %>% 
+                    str_replace(., "normoxia", "H0") %>% 
+                    str_replace(., "Overlaps", "Olaps")) %>% #devo fare questa modifica dei nomi perchè se no dopo i nomi son troppo lunghi per essere salavati come nome dello sheet excel
+  dplyr::mutate(Only_sign = map(data,
+                                \(x) dplyr::filter(x, Sign == "Yes")),
+                HIFs = map(data,
+                           \(x) dplyr::filter(x, str_detect(Motif, "HIF"))
+                ))
+
+Motifs_result_ATAC_HDAC4_on_SEs_nested$Sample
+```
+
+#salvo tabelle da mandare al prof (solo HDAC4)
+```{r}
+HDAC4_Motifs_result_ATAC_HDAC4_on_SEs_list <- Motifs_result_ATAC_HDAC4_on_SEs_nested %>% 
+  dplyr::filter(HDAC4_or_ATAC == "HDAC4") %>% 
+  pull(Only_sign, name = Sample)
+
+names(HDAC4_Motifs_result_ATAC_HDAC4_on_SEs_list)
+```
+
+```{r}
+openxlsx::write.xlsx(HDAC4_Motifs_result_ATAC_HDAC4_on_SEs_list, file = "/media/alessio/Data/hypoxia/ChIPseq/tables/Motifs_HDAC4_peaks_on_DEgs_SEs.xlsx")
+```
+
+#salvo tabelle da mandare al prof (solo ATAC)
+```{r}
+ATAC_Motifs_result_ATAC_HDAC4_on_SEs_list <- Motifs_result_ATAC_HDAC4_on_SEs_nested %>% 
+  dplyr::filter(HDAC4_or_ATAC == "ATAC") %>% 
+  pull(Only_sign, name = Sample)
+
+names(ATAC_Motifs_result_ATAC_HDAC4_on_SEs_list)
+```
+
+```{r}
+openxlsx::write.xlsx(ATAC_Motifs_result_ATAC_HDAC4_on_SEs_list, file = "/media/alessio/Data/hypoxia/ChIPseq/tables/Motifs_ATAC_peaks_on_DEgs_SEs.xlsx")
+```

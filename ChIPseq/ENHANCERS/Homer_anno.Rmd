@@ -1,0 +1,158 @@
+```{r setup, echo = FALSE}
+library(tidyverse)
+library(ggplot2)
+library(scales)
+library(patchwork)
+```
+
+#carico file di annotazione Homer H3K27ac e H2BK120ac
+```{r}
+H2BK120ac_path = "/media/alessio/Data/hypoxia/ChIPseq/samples/H2BK120AC/"
+H2BK120ac_dirs = c("C1B",
+"C1E",
+"C1H",
+"C2B",
+"C2E",
+"C2H",
+"K125B1",
+"K125E1",
+"K125H1",
+"K26B1",
+"K26E1",
+"K26H1")
+
+H2BK120ac_peak_list <- list()
+
+for (i in H2BK120ac_dirs) {
+  file_tmp <- paste0(H2BK120ac_path,i,"/",i,"_HomerAnnotation.txt")
+  tmp_anno <- read.delim(file_tmp, header = T)
+  tmp_anno <- tmp_anno |>  dplyr::rename(Peak_ID = 1) |> 
+    dplyr::mutate(Annotation = str_remove(Annotation, "\\s*\\(.*\\)")) |> 
+    dplyr::mutate(Detailed.Annotation = str_remove(Detailed.Annotation, "\\s*\\(.*\\)")) |> 
+    dplyr::filter(!is.na(Annotation))
+  H2BK120ac_peak_list[[i]] <- tmp_anno
+  rm(tmp_anno)
+}
+
+unique(H2BK120ac_peak_list$C1B$Detailed.Annotation)
+
+H3K27ac_path = "/media/alessio/Data/hypoxia/ChIPseq/samples/H3K27AC/"
+H3K27ac_dirs = c("C1A",
+"C1D",
+"C1G",
+"C2A",
+"C2D",
+"C2G",
+"K125A1",
+"K125D1",
+"K125G1",
+"K26A1",
+"K26D1",
+"K26G1")
+
+H3K27ac_peak_list <- list()
+
+for (i in H3K27ac_dirs) {
+  file_tmp <- paste0(H3K27ac_path,i,"/",i,"_HomerAnnotation.txt")
+  tmp_anno <- read.delim(file_tmp, header = T)
+  tmp_anno <- tmp_anno |>  dplyr::rename(Peak_ID = 1) |> 
+    dplyr::mutate(Annotation = str_remove(Annotation, "\\s*\\(.*\\)")) |> 
+      dplyr::mutate(Detailed.Annotation = str_remove(Detailed.Annotation, "\\s*\\(.*\\)")) |> 
+        dplyr::filter(!is.na(Annotation))
+  H3K27ac_peak_list[[i]] <- tmp_anno
+  rm(tmp_anno)
+}
+```
+
+#filtro e sistemo le tabelle
+```{r}
+insertNames <- function(lista){
+  retList <- list()
+  
+  for (i in names(lista)){
+    df <- lista[[i]] |> 
+      dplyr::mutate(Sample = i) |> 
+      dplyr::select(Annotation, Sample)
+    
+    retList[[i]] <- df
+  }
+  return(retList)
+}
+
+H2BK120ac_peak_list_clean <- insertNames(H2BK120ac_peak_list)
+H3K27ac_peak_list_clean <- insertNames(H3K27ac_peak_list)
+```
+
+#creo una tabella unica per fare barplot
+```{r}
+Bind_rows_from_list <- function(list) {
+  df <- data.frame()
+  for (i in names(list)) {
+  tmp_df <- list[[i]]
+  df <- df |> 
+    bind_rows(tmp_df)
+  }
+  return(df)
+}
+
+DF_barplot_H2BK120ac <- Bind_rows_from_list(H2BK120ac_peak_list_clean)
+DF_barplot_H3K27ac <- Bind_rows_from_list(H3K27ac_peak_list_clean)
+```
+
+#Barplot
+```{r}
+order = c("Intergenic", "TTS", "exon", "intron", "promoter-TSS")
+DF_barplot_H3K27ac$Annotation <- factor(DF_barplot_H3K27ac$Annotation, levels = order)
+DF_barplot_H2BK120ac$Annotation <- factor(DF_barplot_H2BK120ac$Annotation, levels = order)
+
+Peaks_barplot_fill <- function(df, subtitle) {
+  df |> 
+    ggplot(aes(x = Sample, fill = Annotation)) +
+    geom_bar(position = "fill", stat = "count", color = "black") +
+    # geom_text(aes(label = after_stat(count)),
+    #         stat = "count",
+    #         position = position_fill(vjust = 0.5),
+    #         color = "black",
+    #         size = 3) +
+  scale_y_continuous(name = "Percentage", labels = label_percent()) +
+  scale_fill_viridis_d(option = "A") +  
+  #scale_fill_manual(values = colorsss) +
+  theme_bw() +
+  labs(
+    title = "Genomic regions of peaks",
+    subtitle = subtitle,
+    x = NULL,
+    fill = "Regions"
+  )
+}
+
+H3K27ac_position_peaks_barplot <- Peaks_barplot_fill(DF_barplot_H3K27ac, "H3K27ac")
+print(H3K27ac_position_peaks_barplot)
+
+H2BK120ac_position_peaks_barplot <- Peaks_barplot_fill(DF_barplot_H2BK120ac, "H2BK120ac")
+print(H2BK120ac_position_peaks_barplot)
+
+#ggsave(Peak_position_acetylations, filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/Position_acetylation.png", dpi = 300, height = 10, width = 18)
+```
+
+```{r}
+#H3K27ac solo normossia
+H3K27ac_position_peaks_barplot_normoxia <- Peaks_barplot_fill((DF_barplot_H3K27ac |> dplyr::filter(Sample %in% c("C1A", "C2A", "K125A1", "K26A1"))), "H3K27ac")
+H3K27ac_position_peaks_barplot_normoxia_color_default <- Peaks_barplot_fill((DF_barplot_H3K27ac |> dplyr::filter(Sample %in% c("C1A", "C2A", "K125A1", "K26A1"))), "H3K27ac") 
+
+ggsave(H3K27ac_position_peaks_barplot_normoxia, filename = "/media/alessio/Data/hypoxia/ChIPseq/Figure_paper/H3K27ac_Normoxia_peaks_positions.png", dpi = 300, height = 8, width = 6)
+ggsave(H3K27ac_position_peaks_barplot_normoxia_color_default, filename = "/media/alessio/Data/hypoxia/ChIPseq/Figure_paper/H3K27ac_Normoxia_peaks_positions_counts.png", dpi = 300, height = 8, width = 6)
+```
+
+```{r}
+dplyr::count(H3K27ac_peak_list$C1A, Annotation)
+```
+
+```{r}
+#H2BK120ac solo normossia
+H2BK120ac_position_peaks_barplot_normoxia <- Peaks_barplot_fill((DF_barplot_H2BK120ac |> dplyr::filter(Sample %in% c("C1B", "C2B", "K125B1", "K26B1"))), "H2BK120ac")
+H2BK120ac_position_peaks_barplot_normoxia_color_default <- Peaks_barplot_fill((DF_barplot_H2BK120ac |> dplyr::filter(Sample %in% c("C1B", "C2B", "K125B1", "K26B1"))), "H2BK120ac") 
+
+ggsave(H2BK120ac_position_peaks_barplot_normoxia, filename = "/media/alessio/Data/hypoxia/ChIPseq/Figure_paper/H2BK120ac_Normoxia_peaks_positions.png", dpi = 300, height = 8, width = 6)
+ ggsave(H2BK120ac_position_peaks_barplot_normoxia_color_default, filename = "/media/alessio/Data/hypoxia/ChIPseq/Figure_paper/H2BK120ac_Normoxia_peaks_positions_counts.png", dpi = 300, height = 8, width = 6)
+```

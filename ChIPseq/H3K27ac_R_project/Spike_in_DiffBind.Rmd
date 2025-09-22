@@ -1,0 +1,77 @@
+```{r setup, results = "hide"}
+library(DiffBind)
+library(tidyverse)
+library(ggplot2)
+library(ChIPseeker)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(clusterProfiler)
+library(AnnotationHub)
+```
+
+#Diffbind
+#preprocessing dba count
+```{r}
+#leggo samplesheet e aggiungo anche colonna con i bam di spikein
+coldata = read.csv("/media/alessio/Data/hypoxia/ChIPseq/experiment.csv") |> 
+  dplyr::filter(Condition == "H3K27AC") |> 
+  dplyr::mutate(Tissue = Factor) |> 
+  dplyr::mutate(Factor = paste0(Tissue,"_",Treatment)) |> 
+  dplyr::mutate(Spikein = str_c("/media/alessio/Data/hypoxia/ChIPseq/samples/",SampleID,"/droso_only_sorted.bam"))
+  
+
+
+ChIP <- dba(sampleSheet=coldata, scoreCol = 5)
+
+plot(ChIP)
+
+ChIP <- dba.count(ChIP, bUseSummarizeOverlaps = TRUE, bParallel = FALSE)
+```
+
+#normalization
+```{r}
+ChIP_normalized_spikeIn <- dba.normalize(ChIP, normalize="RLE", spikein = TRUE)
+
+#provare dba_norm_lib
+
+dba.plotPCA(ChIP_normalized_spikeIn, color = DBA_TISSUE, label=DBA_ID)
+
+plot(ChIP_normalized_spikeIn)
+```
+
+#results
+```{r}
+#setting del contrast
+Diff_peaks_contrast_spikeIn <- list(Normoxia_H4KO_vs_CAS9 = (Normoxia_H4KO_vs_CAS9 <- dba.contrast(ChIP_normalized_spikeIn,
+                                                                                  design = ~ Factor, contrast = c("Factor", "H4KO_0h", "CAS9_0h"))),
+                  H6_H4KO_vs_CAS9 = (H6_H4KO_vs_CAS9 <- dba.contrast(ChIP_normalized_spikeIn,
+                                                                     design = ~ Factor, contrast = c("Factor", "H4KO_6h", "CAS9_6h"))),
+                  H24_H4KO_vs_CAS9 = (H24_H4KO_vs_CAS9 <- dba.contrast(ChIP_normalized_spikeIn,
+                                                                       design = ~ Factor, contrast = c("Factor", "H4KO_24h", "CAS9_24h")))
+ 
+                                                      )
+#calcolo dei picchi differenziali
+Diff_peaks_analyze_spikeIn <- lapply(Diff_peaks_contrast_spikeIn, function(analyze) {
+  analyzed <- dba.analyze(analyze)
+  return(analyzed)
+})
+
+for (i in Diff_peaks_analyze_spikeIn) {
+  show <- dba.show(i, bContrasts=TRUE)
+  print(show)
+  rm(i, show)
+}
+
+for (i in Diff_peaks_analyze_spikeIn) {
+  MA <- dba.plotMA(i, contrast = 1)
+  print(MA)
+  rm(i, MA)
+}
+
+for (i in seq_along(Diff_peaks_analyze_spikeIn)) {
+  namevenn <- names(Diff_peaks_analyze_spikeIn)[i]
+  namevenn <- str_extract(namevenn, ("Normoxia|H\\d{1,2}"))
+  Venn <- dba.plotVenn(Diff_peaks_analyze_spikeIn[[i]], contrast = 1, bDB = TRUE, bGain = TRUE, bLoss = TRUE, bAll = FALSE,
+                       main = paste0("H3K27ac\n",namevenn))
+  print(Venn)
+}
+```

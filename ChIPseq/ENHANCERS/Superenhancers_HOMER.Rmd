@@ -1,0 +1,393 @@
+```{r setup, echo = F}
+library(tidyverse)
+library(GenomicRanges)
+library(GenomicAlignments)
+library(rtracklayer)
+library(ChIPseeker)
+library(VennDiagram)
+library(ChIPpeakAnno)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(ggpubr)
+library(scales)
+library(gridExtra)
+```
+
+
+
+#Definisco TEs e SEs per H3K27ac
+
+#carico i files SEs.txt
+```{r}
+path = "/media/alessio/Data/hypoxia/ChIPseq/Homer_anno/Tag_Directories"
+dirs = c("C1A_TagDir", "C1D_TagDir", "C1G_TagDir",
+         "C2A_TagDir", "C2D_TagDir", "C2G_TagDir",
+         "K125A1_TagDir", "K125D1_TagDir", "K125G1_TagDir",
+         "K26A1_TagDir", "K26D1_TagDir", "K26G1_TagDir")
+file = "SEs.txt"
+
+Enhancers.list.H3K27ac <- list()
+
+for (i in dirs) {
+  name = str_remove(i, "_TagDir")
+  tmp_path = file.path(path,i,file)
+  tmp_df = read.delim(tmp_path, skip = 43) |> 
+    dplyr::select(1:9)
+  Enhancers.list.H3K27ac[[name]] <- tmp_df 
+}
+```
+
+#separo TEs e SEs sulla base dello slope value ( > 1 é SE)
+```{r}
+Enhancers.list.H3K27ac.defined <- lapply(Enhancers.list.H3K27ac, function(df) {
+  def <- df |> 
+    dplyr::arrange(Normalized.Tag.Count) |> 
+    dplyr::mutate(Enhancer_Def = case_when(
+      (superEnhancer.slope >= 1) ~ "Super",
+      TRUE ~ "Typical"
+    ))
+  return(def)
+})
+
+for (i in names(Enhancers.list.H3K27ac.defined)) {
+  Count <- Enhancers.list.H3K27ac.defined[[i]] |> 
+    dplyr::group_by(Enhancer_Def) |> dplyr::count()
+  print(Count)
+}
+
+```
+
+#plot
+```{r}
+plotEnhancers <- function(df, namex) {
+
+SEs_count = count(df$Enhancer_Def == "Super")
+TEs_count = count(df$Enhancer_Def == "Typical")
+
+df |> 
+  ggplot(aes(x = seq_along(Normalized.Tag.Count),  y = Normalized.Tag.Count, color = Enhancer_Def)) +
+  geom_point() +
+  #geom_line() +
+  scale_colour_manual(values = c("red", "black")) +
+  theme_minimal() +
+  labs(title = namex,
+    y = "Score",
+       x = NULL,
+       color = "Class:") +
+  annotate(geom = "label",
+           label = paste0("SEs: ",SEs_count),
+           x = 7000, y = 6000, size = 4) +
+  annotate(geom = "label",
+           label = paste0("TEs: ",TEs_count),
+           x = 2000, y = 6000, size = 4) +
+  theme(plot.title = element_text(size = 10),
+        axis.title.x = element_text(size = 8),
+        axis.title.y = element_text(size = 8),
+        legend.position = "none")
+}
+
+
+# par(mfrow = c(3, 4))
+# 
+# for (i in names(Enhancers_list_defined)) {
+#   plot <- plotEnhancers(Enhancers_list_defined[[i]], i)
+#   print(plot)
+# }
+
+
+plots <- lapply(names(Enhancers.list.H3K27ac.defined), function(name) {
+  plot <- plotEnhancers(Enhancers.list.H3K27ac.defined[[name]], name)
+})
+
+SEs_plot <- gridExtra::grid.arrange(grobs = plots, ncol = 3, top=textGrob("H3K27ac super enhancers"))
+
+#ggsave(SEs_plot, filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/Enhancers_H3K27ac_HOMER.png", dpi = 300, height = 9, width = 15)
+```
+
+
+#Ora che ho quantificato i SEs trasformo tutto in GRanges per vedere gli overlaps
+```{r}
+#estraggo solo i SEs
+SEs.list.H3K27ac.only <- lapply(Enhancers.list.H3K27ac.defined, function(df) {
+  SEsonly <- df |> 
+    dplyr::filter(Enhancer_Def == "Super")
+  return(SEsonly)
+})
+
+#trasformo in GRanges
+SEs.list.H3K27ac.only.Granges  <- lapply(SEs.list.H3K27ac.only, function(df) {
+  GRanges_SEs <- makeGRangesFromDataFrame(df, keep.extra.columns = TRUE)
+  return(GRanges_SEs)
+})
+
+SEs_Venn_grobs <- list()
+for (i in c(1:3,7:9)) {
+  name1 <- names(SEs.list.H3K27ac.only.Granges[i])
+  name2 <- names(SEs.list.H3K27ac.only.Granges[i+3])
+  Venn <- makeVennDiagram(Peaks = list(SEs.list.H3K27ac.only.Granges[[i]], SEs.list.H3K27ac.only.Granges[[i+3]]),
+                          NameOfPeaks = c(name1, name2), minoverlap = 100)
+  SEs_Venn_grobs[[i]] <- grid::grid.grab(expr = Venn)
+
+}
+SEs_Venn_grobs <- SEs_Venn_grobs[-c(4, 5, 6)]
+
+SEs_overlaps_Venn_Arranged <- grid.arrange(grobs = SEs_Venn_grobs, ncol = 3, top = textGrob("SEs overlaps between replicates"))
+
+# ggsave(SEs_overlaps_Venn_Arranged, filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/Venn_overlaps_Replicates_SEs_H3K27ac_.png", dpi = 300, height = 9, width = 15)
+```
+
+#esporto i Granges in bed format
+```{r}
+for (i in names(SEs.list.H3K27ac.only)) {
+  write.table(SEs.list.H3K27ac.only[[i]][,-1], quote=F, sep="\t", row.names=F, col.names=F, paste0("/media/alessio/Data/hypoxia/ChIPseq/Homer_anno/H3K27ac_superenhancers_bedfiles_fromR_manually_filtered/",i,".bed"))
+}
+```
+
+#ho fatto multibigwigsummary con deeptools (Enhancers.sh), ora faccio a mano una PCA con clusterR sulle Rawcounts calcolate da deeptools
+```{r}
+library(ClusterR)
+library(factoextra)
+library(clusterSim)
+library(stats)
+library(plotly)
+library(ggfortify)
+
+Rawcounts.tab <- read.delim("/media/alessio/Data/hypoxia/ChIPseq/Homer_anno/H3K27ac_superenhancers_bedfiles_fromR_manually_filtered/RawCounts.tab") |> 
+  dplyr::rename_all(~ str_remove_all(., "\\.|X")) |> 
+  dplyr::select(!c(1:3)) |> 
+  as.matrix()
+
+
+#https://rpubs.com/Bury/ClusteringOnPcaResults
+#devo fare il transpose della matrix (t), alreimenti dopo non va
+Rawcounts.tab.norm <- data.Normalization(t(Rawcounts.tab), type="n1", normalization="columns")
+#Rawcounts.tab.norm <- t(Rawcounts.tab)
+
+labels <- str_remove(rownames(Rawcounts.tab.norm), "_RPKM")
+
+distance <- dist(Rawcounts.tab.norm) 
+mds1<-cmdscale(distance, k=2) 
+
+png(filename = "PCA_SEs.png", res = 300, units = "cm", height = 15, width = 15)
+plot(mds1, type='n', xlab = "PC1", ylab = "PC2", main = "Super enhancers PCA (RPKM norm)")
+text(mds1, labels = labels,  cex=0.7, adj=0.5)
+dev.off()
+#la PCA in teoria è già fatta qua
+
+# pca_res <- prcomp(Rawcounts.tab.norm, scale. = T)
+# 
+# 
+# p <- autoplot(pca_res, data = Rawcounts.tab.norm, colour = row.names(Rawcounts.tab.norm), label = TRUE)
+# 
+# 
+# ggplotly(p)
+
+
+# PCA <- prcomp(Rawcounts.tab.norm, center=FALSE, scale.=FALSE)
+# summary(PCA)
+# 
+# fviz_eig(PCA)
+# 
+# eig.val<-get_eigenvalue(PCA)
+# eig.val
+# #2 dimensions is enough it seems
+# 
+# PCA <- prcomp(Rawcounts.tab.norm, rank. = 11)
+# PCA.results <- PCA$x
+# hopkins(Rawcounts.tab.norm, n=nrow(PCA.results)-1) 
+# 
+# fviz_nbclust(PCA.results, FUNcluster=kmeans, k.max = 11) 
+# 
+# km1 <- eclust(PCA.results, "kmeans", hc_metric="euclidean")
+
+```
+
+#Overlap Typical Enhancers
+```{r}
+#estraggo i Typical enhancers
+#estraggo solo i SEs
+TEs_list_only <- lapply(Enhancers_list_defined, function(df) {
+  TEsonly <- df |> 
+    dplyr::filter(Enhancer_Def == "Typical")
+  return(TEsonly)
+})
+
+#trasformo in GRanges
+TEs_list_GRanges <- lapply(TEs_list_only, function(df) {
+  GRanges_TEs <- makeGRangesFromDataFrame(df)
+  return(GRanges_TEs)
+})
+
+TEs_Venn_grobs <- list()
+for (i in c(1:3,7:9)) {
+  name1 <- names(TEs_list_GRanges[i])
+  name2 <- names(TEs_list_GRanges[i+3])
+  Venn <- makeVennDiagram(Peaks = list(TEs_list_GRanges[[i]], TEs_list_GRanges[[i+3]]),
+                          NameOfPeaks = c(name1, name2), minoverlap = 100)
+  TEs_Venn_grobs[[i]] <- grid::grid.grab(expr = Venn)
+
+}
+TEs_Venn_grobs <- TEs_Venn_grobs[-c(4, 5, 6)]
+
+TEs_overlaps_Venn_Arranged <- grid.arrange(grobs = TEs_Venn_grobs, ncol = 3, top = textGrob("TEs overlaps between replicates"))
+
+# ggsave(TEs_overlaps_Venn_Arranged, filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/Venn_overlaps_Replicates_TEs_H3K27ac_.png", dpi = 300, height = 9, width = 15)
+```
+
+#Annotazione delle regioni di SEs e TEs sui consensus fra replicati
+#TEs
+```{r}
+TEs.ConsensusREP.list.Granges <- list()
+nomi <- c("CAS9_normoxia", "CAS9_6H_hypoxia", "CAS9_24H_hypoxia",".", ".", ".",
+           "H4KO_normoxia", "H4KO_6H_hypoxia", "H4KO_24H_hypoxia")
+for (i in c(1:3, 7:9)) {
+  currentname <- nomi[[i]]
+  Overlapped <- subsetByOverlaps(TEs_list_GRanges[[i]], TEs_list_GRanges[[i+3]], minoverlap = 100)
+  TEs.ConsensusREP.list.Granges[[currentname]] <- Overlapped
+}
+```
+
+#SEs
+```{r}
+SEs.ConsensusREP.list.Granges <- list()
+nomi <- c("CAS9_normoxia", "CAS9_6H_hypoxia", "CAS9_24H_hypoxia",".", ".", ".",
+           "H4KO_normoxia", "H4KO_6H_hypoxia", "H4KO_24H_hypoxia")
+for (i in c(1:3, 7:9)) {
+  currentname <- nomi[[i]]
+  Overlapped <- subsetByOverlaps(SEs_list_GRanges[[i]], SEs_list_GRanges[[i+3]], minoverlap = 100)
+  SEs.ConsensusREP.list.Granges[[currentname]] <- Overlapped
+}
+```
+
+#Chipseeker annotation
+```{r}
+#txdb_V44 <- makeTxDbFromGFF("/media/alessio/Data/genome110/gencode/gencode.v44.annotation.gff3")
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene::TxDb.Hsapiens.UCSC.hg38.knownGene
+
+TEs_annotate <- lapply(TEs.ConsensusREP.list.Granges, function(GRanges) {
+  Anno <- annotatePeak(GRanges,
+                          columns = c("ENTREZID", "ENSEMBL", "SYMBOL", "GENENAME"),
+                          annoDb="org.Hs.eg.db",
+                          TxDb = txdb, tssRegion=c(-3000, 3000))
+  return(Anno)
+})
+
+for (i in seq_along(TEs_annotate)) {
+  nameanno <- names(TEs_annotate)[i]
+  #nameanno <- str_extract(nameanno, ("Normoxia|H\\d{1,2}"))
+  annobar <- plotAnnoBar(TEs_annotate[[i]], title = str_c("H3K27ac Typical enhacers genomic distribution ",nameanno))
+  print(annobar)
+}
+
+SEs_annotate <- lapply(SEs.ConsensusREP.list.Granges, function(GRanges) {
+  Anno <- annotatePeak(GRanges,
+                          columns = c("ENTREZID", "ENSEMBL", "SYMBOL", "GENENAME"),
+                          annoDb="org.Hs.eg.db",
+                          TxDb = txdb, tssRegion=c(-1000, 000))
+  return(Anno)
+})
+
+for (i in seq_along(SEs_annotate)) {
+  nameanno <- names(SEs_annotate)[i]
+  #nameanno <- str_extract(nameanno, ("Normoxia|H\\d{1,2}"))
+  annobar <- plotAnnoBar(SEs_annotate[[i]], title = str_c("H3K27ac Super enhancers genomic distribution ",nameanno))
+  print(annobar)
+}
+
+#NON VA BENE, da tutto sul promotore ma ci deve essere qualche bias, con HOMER non succede
+```
+
+#Annoto con HOMER (esporto i GRanges come bed files e annoto da bash)
+```{r}
+for (i in names(TEs.ConsensusREP.list.Granges)) {
+  export.bed(TEs.ConsensusREP.list.Granges[[i]], paste0("/media/alessio/Data/hypoxia/ChIPseq/Homer_anno/H3K27ac_superenhancers_bedfiles_fromR_manually_filtered/","Typical_",i,"_consensusRep.bed"))
+}
+
+for (i in names(SEs.ConsensusREP.list.Granges)) {
+  export.bed(SEs.ConsensusREP.list.Granges[[i]], paste0("/media/alessio/Data/hypoxia/ChIPseq/Homer_anno/H3K27ac_superenhancers_bedfiles_fromR_manually_filtered/","Super_",i,"_consensusRep.bed"))
+}
+```
+
+#Carico le annotazioni di Homer
+```{r}
+path = "/media/alessio/Data/hypoxia/ChIPseq/Homer_anno/H3K27ac_superenhancers_bedfiles_fromR_manually_filtered/"
+files = c("Super_CAS9_24H_hypoxia_consensusRep_HomerAnno.bed",  "Super_H4KO_24H_hypoxia_consensusRep_HomerAnno.bed",  "Typical_CAS9_24H_hypoxia_consensusRep_HomerAnno.bed",  "Typical_H4KO_24H_hypoxia_consensusRep_HomerAnno.bed",
+"Super_CAS9_6H_hypoxia_consensusRep_HomerAnno.bed",   "Super_H4KO_6H_hypoxia_consensusRep_HomerAnno.bed",   "Typical_CAS9_6H_hypoxia_consensusRep_HomerAnno.bed", "Typical_H4KO_6H_hypoxia_consensusRep_HomerAnno.bed",
+"Super_CAS9_normoxia_consensusRep_HomerAnno.bed",     "Super_H4KO_normoxia_consensusRep_HomerAnno.bed",     "Typical_CAS9_normoxia_consensusRep_HomerAnno.bed", "Typical_H4KO_normoxia_consensusRep_HomerAnno.bed")
+
+Typical_Super_Annotation_list <- list()
+
+for (i in files) {
+  tmp_path = file.path(path,i)
+  df = read.delim(tmp_path) |> 
+    dplyr::select(!1) |> 
+    dplyr::mutate("Sample" = str_remove(i, "_consensusRep_HomerAnno.bed")) |> 
+    dplyr::mutate(Annotation = str_remove(Annotation, "\\s*\\(.*?\\)\\s*")) |> 
+    dplyr::mutate(Detailed.Annotation = str_remove(Detailed.Annotation, "\\s*\\(.*?\\)\\s*")) |> 
+    dplyr::mutate(Annotation = str_remove(Annotation, "\\.\\d+$")) |> 
+    dplyr::mutate(Detailed.Annotation = str_remove(Detailed.Annotation, "\\.\\d+$")) |> 
+    tidyr::separate(col = Sample, into = c("Class", "Sample"), sep = "_", extra = "merge")
+  Typical_Super_Annotation_list[[i]] <- df
+}
+```
+
+#creo un dataframe unico
+```{r}
+Typical_Super_Anno_Dataframe <- data.frame()
+
+for (i in names(Typical_Super_Annotation_list)) {
+  Typical_Super_Anno_Dataframe <- bind_rows(Typical_Super_Anno_Dataframe, Typical_Super_Annotation_list[[i]])
+}
+
+
+Typical_Super_Anno_Dataframe |> 
+  group_by(Annotation) |> 
+  dplyr::filter(str_detect(Class, "Super")) |> 
+  dplyr::count()
+
+Typical_Super_Anno_Dataframe |> 
+  group_by(Annotation) |> 
+  dplyr::filter(str_detect(Class, "Typical")) |> 
+  dplyr::count()
+```
+
+#Barplot
+```{r}
+Peaks_barplot_fill <- function(df, subtitle) {
+  df |> 
+    dplyr::mutate(Sample = fct_relevel(Sample, c("CAS9_normoxia", "CAS9_6H_hypoxia", "CAS9_24H_hypoxia",
+                                         "H4KO_normoxia", "H4KO_6H_hypoxia", "H4KO_24H_hypoxia"))) |> 
+    ggplot(aes(y = Sample, fill = Annotation)) +
+    geom_bar(position = "fill", stat = "count", color = "black") +
+    # geom_text(aes(label = after_stat(count)),
+    #          stat = "count",
+    #          position = position_fill(vjust = 0.5),
+    #          color = "black",
+    #          size = 3) +
+  scale_x_continuous(name = "Percentage", labels = label_percent()) +
+    facet_wrap(~ Class) +
+  #scale_fill_manual(values = colorsss) +
+  theme_bw() +
+  labs(
+    title = "Enhancers Genomic Distribution",
+    subtitle = subtitle,
+    y = NULL,
+    fill = "Position"
+  )
+    
+}
+
+
+H3K27ac_Enhancers_genomic_distribution_Homer_annotated <- Peaks_barplot_fill(Typical_Super_Anno_Dataframe, "H3K27ac")
+
+# ggsave(H3K27ac_Enhancers_genomic_distribution_Homer_annotated, filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/H3K27ac_Enhancers_genomic_distribution_Homer_annotated.png", dpi = 300, height = 9, width= 18)
+```
+
+
+#Overlap Super enhancers in normossia (uso i consensus fra replicati)
+```{r}
+SEs.ConsensusREP.list.Granges
+
+Normoxia.SEs.H4KO <-  subsetByOverlaps(SEs.ConsensusREP.list.Granges$H4KO_normoxia, SEs.ConsensusREP.list.Granges$CAS9_normoxia, invert = T)
+export.bed(Normoxia.SEs.H4KO, "/media/alessio/Data/hypoxia/ChIPseq/Homer_anno/H3K27ac_superenhancers_bedfiles_fromR_manually_filtered/H4KO_only_normoxia_SEs.bed")
+```
+

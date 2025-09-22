@@ -1,0 +1,122 @@
+
+```{r, setup}
+library(tidyverse)
+library(GenomicRanges)
+library(ChIPseeker)
+library(ChIPpeakAnno)
+library(GenomicFeatures)
+```
+
+#Carico i file dei TEs precedentemente creati su "Typical_and_Super"
+```{r}
+path_H3K27ac = "../ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H3K27ac"
+path_H2BK120ac = "../ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H2BK120ac"
+
+H3K27ac_files = list.files(path_H3K27ac, pattern = "TEs", full.names = T)
+H2BK120ac_files = list.files(path_H2BK120ac, pattern = "TEs", full.names = T)
+
+H3K27ac_files
+H2BK120ac_files
+```
+
+#creo una tibble
+```{r}
+chr = str_c("chr", c(1:22, "X", "Y", "M"))
+
+TEs_tab <- tibble(
+    path = c(H3K27ac_files, H2BK120ac_files)
+) |> 
+    dplyr::mutate(Marker = ifelse(str_detect(path, "H3K27ac"), "H3K27ac", "H2BK120ac"),
+    Sample = basename(path) |> str_remove("_TEs.bed")) |> 
+    dplyr::mutate(TEs = map(path, \(x) readPeakFile(x))) |>
+    dplyr::mutate(TEs = map(TEs, \(x) x[seqnames(x) %in% chr])) #filtra solo sui cromosomi noti   
+
+TEs_tab
+```
+
+#Modifico tabella e calcolo le intersections
+```{r}
+TEs_intersections <- TEs_tab |> 
+    dplyr::select(!path) |> 
+    pivot_wider(names_from = Marker, values_from = TEs) |> 
+    dplyr::mutate(intersect = map2(H3K27ac, H2BK120ac, \(x, y) c(subsetByOverlaps(x, y), subsetByOverlaps(y, x)) %>% GenomicRanges::reduce(.)), #faccio così per avere delle intersezioni più corrette che tengono conto sia dell'uno che dell'altro histone mark come reference
+                H3K27ac_excl = map2(H3K27ac, H2BK120ac, \(x, y) subsetByOverlaps(x, y, invert = T)),
+                H2BK120ac_excl = map2(H2BK120ac, H3K27ac, \(x, y) subsetByOverlaps(x, y, invert = T))
+                )
+
+TEs_intersections
+
+TEs_intersections[1, ]
+```
+
+#Converto tutto in numeri di overlap e esclusivi
+```{r}
+TEs_intersection_counts <- TEs_intersections |> 
+    dplyr::mutate(across(where(is.list), ~ map_int(., length)))
+
+TEs_intersection_counts
+```
+
+#salvo tabella con i conteggi
+```{r}
+openxlsx::write.xlsx(TEs_intersection_counts, "../tables/TEs_overlaps_H3K27ac_H2BK120ac_counts.xlsx")
+```
+
+#Converto tutto in annotazioni di ChIPseeker
+```{r}
+txdb = makeTxDbFromGFF("/media/alessio/Data/genome110/gencode/gencode.v45.annotation.gtf")
+
+TEs_intersection_Annotation <- TEs_intersections |> 
+    dplyr::mutate(across(where(is.list), ~ map(., \(x)  {
+        anno <- annotatePeak(peak = x, TxDb = txdb, annoDb = "org.Hs.eg.db", level = "gene")
+        anno <- anno@annoStat
+    }
+    )
+    )
+    )
+```
+
+#Heatmap con ditribuzione genomica (una per ciascun tempo di ipossia e Cas9/H4KO)
+```{r}
+Plots <- list()
+
+for (i in 1:length(TEs_intersection_Annotation)) {
+
+    name = TEs_intersection_Annotation[i, 1] |> unlist() |> as.character()
+
+    Distribution_of_TEs <- TEs_intersection_Annotation[i, 2:6] |> 
+    pivot_longer(cols = everything(), names_to = "Set", values_to = "Anno") |> 
+    unnest(Anno)
+
+
+
+    Plot <- ggplot(Distribution_of_TEs, aes(x = Set, y = Feature, fill = Frequency)) +
+        geom_tile(color="black", linewidth = 0.5) +
+        geom_text(aes(label = round(Frequency, digits = 2)), size = 5) +
+        scale_fill_gradient2(low="white", high = "red", na.value = "lightgrey") +
+    theme_minimal() +
+    theme(
+        panel.grid = element_blank(),        
+        panel.border = element_blank(),    
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_text(size = 15),
+        legend.text = element_text(size = 10),
+        axis.text.x = element_text(angle = 90),
+        panel.background = element_rect(
+        fill = "white", color = NA
+        )
+    ) +
+        labs(title = name)
+    coord_fixed()
+
+    Plots[[name]] <- Plot
+}
+```
+
+
+#Salvo i comuni tra H2Bk120ac e H3K27ac, per fare una tracks per il grant5 del Prof.
+```{r}
+TEs_common_Cas9_0h <- TEs_intersections[[1, "intersect"]] |> as.data.frame() |> dplyr::mutate(strand = ".", name = ".") |>  dplyr::relocate(name , .before = width)
+write_delim(TEs_common_Cas9_0h, "../TEs_commons_H3_H2_Cas9_0H.bed", col_names = F, delim = "\t")
+```

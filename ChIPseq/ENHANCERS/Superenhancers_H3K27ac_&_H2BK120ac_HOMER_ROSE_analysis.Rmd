@@ -1,0 +1,689 @@
+```{r setup}
+library(tidyverse)
+library(GenomicRanges)
+library(ChIPpeakAnno)
+library(gridExtra)
+library(ChIPseeker)
+library(GenomicFeatures)
+library(org.Hs.eg.db)
+library(ggpubr)
+library(scales)
+library(gridExtra)
+```
+
+
+#Carico File di Homer sia per H3K27ac che H2BK120ac
+```{r}
+#H3K27ac
+path = "/media/alessio/Data/hypoxia/ChIPseq/Homer_anno/Tag_Directories"
+dirs_H3K27ac = c("C1A_TagDir", "C1D_TagDir", "C1G_TagDir",
+         "C2A_TagDir", "C2D_TagDir", "C2G_TagDir",
+         "K125A1_TagDir", "K125D1_TagDir", "K125G1_TagDir",
+         "K26A1_TagDir", "K26D1_TagDir", "K26G1_TagDir")
+file = "SEs.txt"
+
+HOMER_SuperEnhancers.list.H3K27ac <- list()
+
+for (i in dirs_H3K27ac) {
+  name = str_remove(i, "_TagDir")
+  tmp_path = file.path(path,i,file)
+  tmp_df = read.delim(tmp_path, skip = 43) |> 
+    dplyr::select(1:9) |> 
+    dplyr::arrange(Normalized.Tag.Count) |> 
+    dplyr::filter(superEnhancer.slope >= 1)
+  HOMER_SuperEnhancers.list.H3K27ac[[paste0("HOMER_",name)]] <- tmp_df 
+}
+
+#trasformo in GRanges
+HOMER_SuperEnhancers.list.H3K27ac.Granges <- lapply(HOMER_SuperEnhancers.list.H3K27ac, function(df) {
+  GRanges_SEs <- makeGRangesFromDataFrame(df)
+  return(GRanges_SEs)
+})
+
+
+#H2Bk120ac
+path = "/media/alessio/Data/hypoxia/ChIPseq/Homer_anno/Tag_Directories"
+dirs_H2BK120ac = c("C1B", "C1E", "C1H", "C2B", "C2E", "C2H", "K125B1", "K125E1", "K125H1", "K26B1", "K26E1", "K26H1") 
+dirs_H2BK120ac = str_c(dirs_H2BK120ac, "_TagDir")
+file = "SEs.txt"
+
+HOMER_SuperEnhancers.list.H2BK120ac <- list()
+
+for (i in dirs_H2BK120ac) {
+  name = str_remove(i, "_TagDir")
+  tmp_path = file.path(path,i,file)
+  tmp_df = read.delim(tmp_path, skip = 43) |> 
+    dplyr::select(1:9) |> 
+    dplyr::arrange(Normalized.Tag.Count) |> 
+    dplyr::filter(superEnhancer.slope >= 1)
+  HOMER_SuperEnhancers.list.H2BK120ac[[paste0("HOMER_",name)]] <- tmp_df 
+}
+
+HOMER_SuperEnhancers.list.H2BK120ac.Granges <- lapply(HOMER_SuperEnhancers.list.H2BK120ac, function(df) {
+  GRanges_SEs <- makeGRangesFromDataFrame(df)
+  return(GRanges_SEs)
+})
+```
+
+#Carico picchi di ROSE
+```{r}
+#H3K27ac
+path_H3K27ac = "/media/alessio/Data/hypoxia/ChIPseq/ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H3K27ac/"
+dir_H3K27ac = c("C1A_TagDir", "C1D_TagDir", "C1G_TagDir",
+         "C2A_TagDir", "C2D_TagDir", "C2G_TagDir",
+         "K125A1_TagDir", "K125D1_TagDir", "K125G1_TagDir",
+         "K26A1_TagDir", "K26D1_TagDir", "K26G1_TagDir")
+dir_H3K27ac = str_remove(dir_H3K27ac, "_TagDir")
+file = "_superEnhancer_ROSE.bed"
+
+ROSE_SuperEnhancers.list.H3K27ac <- list()
+
+for (i in dir_H3K27ac) {
+  tmp.path = file.path(path_H3K27ac,i,paste0(i,file))
+  tmp.df <- read.delim(tmp.path, header = F) |> 
+    dplyr::rename("chr" = V1, "start"= V2, "end" = V3)
+  ROSE_SuperEnhancers.list.H3K27ac[[paste0("ROSE_",i)]] <- tmp.df
+}
+
+#trasformo in GRanges
+ROSE_SuperEnhancers.list.H3K27ac.Granges <- lapply(ROSE_SuperEnhancers.list.H3K27ac, function(df) {
+  Granges <- makeGRangesFromDataFrame(df)
+  return(Granges)
+})
+
+
+#H2BK120ac
+path_H2BK120ac = "/media/alessio/Data/hypoxia/ChIPseq/ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H2BK120ac/"
+dirs_H2BK120ac = c("C1B", "C1E", "C1H", "C2B", "C2E", "C2H", "K125B1", "K125E1", "K125H1", "K26B1", "K26E1", "K26H1") 
+file = "_superEnhancer_ROSE.bed"
+
+ROSE_SuperEnhancers.list.H2BK120ac <- list()
+
+for (i in dirs_H2BK120ac) {
+  tmp.path = file.path(path_H2BK120ac,i,paste0(i,file))
+  tmp.df <- read.delim(tmp.path, header = F) |> 
+      dplyr::rename("chr" = V1, "start"= V2, "end" = V3)
+  ROSE_SuperEnhancers.list.H2BK120ac[[paste0("ROSE_",i)]]  <- tmp.df
+}
+
+#traformo in Granges
+ROSE_SuperEnhancers.list.H2BK120ac.Granges <- lapply(ROSE_SuperEnhancers.list.H2BK120ac, function(df) {
+  Granges <- makeGRangesFromDataFrame(df)
+  return(Granges)
+  })
+
+```
+
+
+#Overlaps between HOMER and ROSE (without merging overlapping replicates)
+```{r}
+#H3K27ac overlap tra HOMER e ROSE
+for (i in 1:12) {
+   Venn <- makeVennDiagram(Peaks = list(HOMER_SuperEnhancers.list.H3K27ac.Granges[[i]], ROSE_SuperEnhancers.list.H3K27ac.Granges[[i]]),
+                          NameOfPeaks = c(names(HOMER_SuperEnhancers.list.H3K27ac.Granges)[[i]], names(ROSE_SuperEnhancers.list.H3K27ac.Granges)[[i]]),
+                          main = "H3K27ac HOMER vs ROSE", margin = 0.1, by = "region", maxgap = 10000)
+   print(Venn)
+}
+
+#H2BK120ac overlap tra HOMER e ROSE
+for (i in 1:12) {
+   Venn <- makeVennDiagram(Peaks = list(HOMER_SuperEnhancers.list.H2BK120ac.Granges[[i]], ROSE_SuperEnhancers.list.H2BK120ac.Granges[[i]]),
+                          NameOfPeaks = c(names(HOMER_SuperEnhancers.list.H2BK120ac.Granges)[[i]], names(ROSE_SuperEnhancers.list.H2BK120ac.Granges)[[i]]),
+                          main = "H2BK120ac HOMER vs ROSE", margin = 0.1, by = "region", maxgap = 10000)
+   print(Venn)
+}
+
+```
+
+#Creo dei file con consensus fra replicati
+```{r}
+nomi <- c("CAS9_normoxia", "CAS9_6H_hypoxia", "CAS9_24H_hypoxia",".", ".", ".",
+           "H4KO_normoxia", "H4KO_6H_hypoxia", "H4KO_24H_hypoxia")
+
+MakeConsensusPeaksetRep <- function(list) {
+  output <- list()
+  for (i in c(1:3, 7:9)) {
+    currentname <- nomi[[i]]
+    Overlapped <- subsetByOverlaps(list[[i]], list[[i+3]])
+     output[[currentname]] <- Overlapped
+  }
+  return(output)
+}
+
+HOMER_SuperEnhancers.list.H3K27ac.Granges.ConsensusRep <- MakeConsensusPeaksetRep(HOMER_SuperEnhancers.list.H3K27ac.Granges)
+HOMER_SuperEnhancers.list.H2BK120ac.Granges.ConsensusRep <- MakeConsensusPeaksetRep(HOMER_SuperEnhancers.list.H2BK120ac.Granges)
+ROSE_SuperEnhancers.list.H3K27ac.Granges.ConsensusRep <- MakeConsensusPeaksetRep(ROSE_SuperEnhancers.list.H3K27ac.Granges)
+ROSE_SuperEnhancers.list.H2BK120ac.Granges.ConsensusRep <- MakeConsensusPeaksetRep(ROSE_SuperEnhancers.list.H2BK120ac.Granges)
+```
+
+#creo una tabella unica
+```{r}
+MakeTableEnhancers <- function(list1, list2, list3, list4) {
+  arg_names <- as.list(substitute(list(list1, list2, list3, list4)))[-1]
+  arg_values <- list(list1, list2, list3, list4)
+  
+  Biglist <- setNames(arg_values, sapply(arg_names, deparse))
+
+  Table <- tibble()
+  for (i in names(Biglist)) {
+    name = i
+    name = str_remove(name,"Granges.")
+    name = str_remove(name, "list.")
+    
+    df_list = Biglist[[i]]
+    
+    for(j in names(df_list)) {
+      tot_df = tibble()
+       counts = nrow(as.data.frame(df_list[[j]]))
+       df = tibble("Algorhythm" = ifelse(str_detect(i, "ROSE"), "ROSE", "HOMER"),  "Marker" = ifelse(str_detect(i, "H3K27ac"), "H3K27ac", "H2BK120ac"), "Condition" = j,"Number of SEs" = counts)
+       tot_df = bind_rows(tot_df, df)
+       Table = bind_rows(Table, tot_df)  
+    }
+  }
+  return(Table)
+}
+
+
+Tavola = MakeTableEnhancers(HOMER_SuperEnhancers.list.H3K27ac.Granges.ConsensusRep, 
+                            HOMER_SuperEnhancers.list.H2BK120ac.Granges.ConsensusRep,
+                            ROSE_SuperEnhancers.list.H3K27ac.Granges.ConsensusRep,
+                            ROSE_SuperEnhancers.list.H2BK120ac.Granges.ConsensusRep)
+```
+
+#salvo la tavola come un immagine
+```{r}
+png(filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/Table_Superenhancers.png", units = "cm", res = 300, height = 18, width = 18)
+P <- tableGrob(Tavola, rows = NULL)
+grid.arrange(P)
+dev.off()
+```
+
+#Salvo la tavola con solo i risultati di ROSE
+```{r}
+png(filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/Table_Superenhancers.ROSE.png", units = "cm", res = 300, height = 10, width = 18)
+P <- tableGrob((Tavola |> dplyr::filter(Algorhythm == "ROSE")) , rows = NULL)
+grid.arrange(P)
+dev.off()
+```
+
+#H4KKO vs CAS9
+```{r}
+VennH4KOvsCAS9 <- function(listx, title) {
+  for (i in 1:3) {
+    Venn <- makeVennDiagram(Peaks =list(listx[[i]], listx[[i+3]]),
+                            NameOfPeaks = c(names(listx)[[i]], names(listx)[[i+3]]),
+                                            main = title,
+                            margin = 0.1)
+    print(Venn)
+  }
+}
+
+VennH4KOvsCAS9(HOMER_SuperEnhancers.list.H3K27ac.Granges.ConsensusRep, "HOMER H3K27ac")
+VennH4KOvsCAS9(HOMER_SuperEnhancers.list.H2BK120ac.Granges.ConsensusRep, "HOMER H2BK120ac")
+VennH4KOvsCAS9(ROSE_SuperEnhancers.list.H3K27ac.Granges.ConsensusRep, "ROSE H3K27ac")
+VennH4KOvsCAS9(ROSE_SuperEnhancers.list.H2BK120ac.Granges.ConsensusRep, "ROSE H2BK120ac")
+```
+
+
+#Vs_normoxia
+```{r}
+VennVsNormoxia <- function(listy, title)  {
+  for (i in c(2:3,5:6)) {
+        Venn <- makeVennDiagram(Peaks =list(listy[[i]], listy[[ifelse(i %in% c(2,3), "CAS9_normoxia", "H4KO_normoxia")]]),
+                            NameOfPeaks = c(names(listy)[[i]], ifelse(i %in% c(2,3), "CAS9_normoxia", "H4KO_normoxia")),
+                                            main = title,
+                            margin = 0.1)
+    print(Venn)
+  }
+}
+
+VennVsNormoxia(HOMER_SuperEnhancers.list.H3K27ac.Granges.ConsensusRep, "HOMER H3K27ac")
+VennVsNormoxia(HOMER_SuperEnhancers.list.H2BK120ac.Granges.ConsensusRep, "HOMER H3K120ac")
+VennVsNormoxia(ROSE_SuperEnhancers.list.H3K27ac.Granges.ConsensusRep, "ROSE H3K27ac")
+VennVsNormoxia(ROSE_SuperEnhancers.list.H2BK120ac.Granges.ConsensusRep, "ROSE H3K120ac")
+```
+
+
+#Da qui in poi lavoro solo su SEs di ROSE
+
+#Overlaps tra H3K27ac e H2BK120ac
+```{r}
+SEs.Venn.grobs <- list()
+
+for (i in names(ROSE_SuperEnhancers.list.H3K27ac.Granges.ConsensusRep)) {
+  Venn <- makeVennDiagram(Peaks = list(ROSE_SuperEnhancers.list.H3K27ac.Granges.ConsensusRep[[i]], ROSE_SuperEnhancers.list.H2BK120ac.Granges.ConsensusRep[[i]]),
+                                        NameOfPeaks = c(paste0("H3K27ac ",i), paste0("H2BK120ac ",i)),
+                          #main = "H3K27ac x H2BK120ac SEs (ROSE)",
+                          margin = 0.15)
+   SEs.Venn.grobs[[i]] <- grid::grid.grab(expr = Venn)
+}
+
+
+SEs.Venn.grobs.arranged <- grid.arrange(grobs = SEs.Venn.grobs, ncol = 3)
+
+#ggsave(SEs.Venn.grobs.arranged, filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/ROSE_Venn/H3K27acxH2BK120ac_ROSE_SEs.png", dpi = 300, height = 12, width = 18)
+```
+
+
+#estraggo solo i Granges specifici di H4KO e di CAS9 sia
+```{r}
+#H3K27ac
+ROSE_SuperEnhancers.list.H3K27ac.Granges.ConsensusRep.H4KO.only <- set_names(
+  lapply(seq_along(ROSE_SuperEnhancers.list.H3K27ac.Granges.ConsensusRep)[4:6], function(x) {
+  H4KO.exclusive <- subsetByOverlaps(ROSE_SuperEnhancers.list.H3K27ac.Granges.ConsensusRep[[x]], 
+                                     ROSE_SuperEnhancers.list.H3K27ac.Granges.ConsensusRep[[x-3]], 
+                                     invert = T, minoverlap = 1)
+  return(H4KO.exclusive)
+}),
+names(ROSE_SuperEnhancers.list.H3K27ac.Granges.ConsensusRep)[4:6]
+)
+
+ROSE_SuperEnhancers.list.H3K27ac.Granges.ConsensusRep.CAS9.only <- set_names(
+  lapply(seq_along(ROSE_SuperEnhancers.list.H3K27ac.Granges.ConsensusRep)[1:3], function(x) {
+  H4KO.exclusive <- subsetByOverlaps(ROSE_SuperEnhancers.list.H3K27ac.Granges.ConsensusRep[[x]], 
+                                     ROSE_SuperEnhancers.list.H3K27ac.Granges.ConsensusRep[[x+3]], 
+                                     invert = T, minoverlap = 1)
+  return(H4KO.exclusive)
+}),
+names(ROSE_SuperEnhancers.list.H3K27ac.Granges.ConsensusRep)[1:3]
+)
+
+#H2BK120ac
+ROSE_SuperEnhancers.list.H2BK120ac.Granges.ConsensusRep.H4KO.only <- set_names(
+  lapply(seq_along(ROSE_SuperEnhancers.list.H2BK120ac.Granges.ConsensusRep)[4:6], function(x) {
+  H4KO.exclusive <- subsetByOverlaps(ROSE_SuperEnhancers.list.H2BK120ac.Granges.ConsensusRep[[x]], 
+                                     ROSE_SuperEnhancers.list.H2BK120ac.Granges.ConsensusRep[[x-3]], 
+                                     invert = T, minoverlap = 1)
+  return(H4KO.exclusive)
+}),
+names(ROSE_SuperEnhancers.list.H2BK120ac.Granges.ConsensusRep)[4:6]
+)
+
+ROSE_SuperEnhancers.list.H2BK120ac.Granges.ConsensusRep.CAS9.only <- set_names(
+  lapply(seq_along(ROSE_SuperEnhancers.list.H2BK120ac.Granges.ConsensusRep)[1:3], function(x) {
+  H4KO.exclusive <- subsetByOverlaps(ROSE_SuperEnhancers.list.H2BK120ac.Granges.ConsensusRep[[x]], 
+                                     ROSE_SuperEnhancers.list.H2BK120ac.Granges.ConsensusRep[[x+3]], 
+                                     invert = T, minoverlap = 1)
+  return(H4KO.exclusive)
+}),
+names(ROSE_SuperEnhancers.list.H2BK120ac.Granges.ConsensusRep)[1:3]
+)
+```
+
+
+#carico i Granges di HDAC4 (SKUT cells)
+```{r}
+HDAC4.ChIP.Granges <- readPeakFile("/media/alessio/Data/NAR2020_Cb/GSM3882325_HDAC4_DMSO_SKUT_peaks.narrowPeak", as = "GRanges")
+```
+
+#overlaps con HDAC4
+```{r}
+Vennnn <- function(list) {
+      for (i in names(list)) {
+     Venn <- makeVennDiagram(Peaks = list(list[[i]], HDAC4.ChIP.Granges),
+                     NameOfPeaks = c(i, "HDAC4 Peaks"))
+     print(Venn)
+    }
+}
+
+Vennnn(ROSE_SuperEnhancers.list.H3K27ac.Granges.ConsensusRep.H4KO.only)
+Vennnn(ROSE_SuperEnhancers.list.H3K27ac.Granges.ConsensusRep.CAS9.only)
+Vennnn(ROSE_SuperEnhancers.list.H2BK120ac.Granges.ConsensusRep.H4KO.only)
+Vennnn(ROSE_SuperEnhancers.list.H2BK120ac.Granges.ConsensusRep.CAS9.only)
+```
+
+
+
+
+
+#Annoto e faccio un plot solo su ROSE H3K27ac e H2BK120ac
+```{r}
+txdb = makeTxDbFromGFF("/media/alessio/Data/genome110/gencode/gencode_V44.gff")
+
+ChIPseekerAnno.ROSE_SuperEnhancers.list.H3K27ac.Granges.ConsensusRep <- lapply(ROSE_SuperEnhancers.list.H3K27ac.Granges.ConsensusRep, function(GR) {
+  Anno <- annotatePeak(GR,
+                       TxDb = txdb,
+                       tssRegion = c(-1000, 100),
+                       level = "transcript",
+                       annoDb = "org.Hs.eg.db",
+                       genomicAnnotationPriority = c("Promoter", "5UTR", "3UTR", "Exon", "Intron", "Downstream", "Intergenic"),
+                       overlap = "TSS",
+                       ignoreOverlap = T
+                       )
+
+  annobar <- plotAnnoBar(Anno)
+  print(annobar)
+  
+  Annodf <- as.data.frame(Anno)
+    
+  return(Annodf)
+})
+
+#continua a non convincermi questa annotazione
+```
+
+#carico i SEs consensus annotati con ROSE
+
+#H3K27ac SEs
+```{r}
+path = "/media/alessio/Data/hypoxia/ChIPseq/ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H3K27ac"
+files = c("C1A_superEnhancer_ROSE_collapsed_Anno.Txt",
+"C1D_superEnhancer_ROSE_collapsed_Anno.Txt",
+"C1G_superEnhancer_ROSE_collapsed_Anno.Txt",
+"C2A_superEnhancer_ROSE_collapsed_Anno.Txt",
+"C2D_superEnhancer_ROSE_collapsed_Anno.Txt",
+"C2G_superEnhancer_ROSE_collapsed_Anno.Txt",
+"K125A1_superEnhancer_ROSE_collapsed_Anno.Txt",
+"K125D1_superEnhancer_ROSE_collapsed_Anno.Txt",
+"K125G1_superEnhancer_ROSE_collapsed_Anno.Txt",
+"K26A1_superEnhancer_ROSE_collapsed_Anno.Txt",
+"K26D1_superEnhancer_ROSE_collapsed_Anno.Txt",
+"K26G1_superEnhancer_ROSE_collapsed_Anno.Txt")
+
+H3K27ac.SEs.ROSE.collapsed.Annotated <- list()
+
+for (i in files) {
+  name = str_remove(i, "_superEnhancer_ROSE_collapsed_Anno.Txt")
+  tmp.path = file.path(path,i)
+  tmp.df = read.delim(tmp.path) |> 
+    dplyr::select("Chr", "Start", "End", "Annotation", "Gene.Name") |> 
+    dplyr::mutate(Annotation = str_remove(Annotation, "\\s*\\(.*\\)")) |> 
+    dplyr::mutate("Sample" = name)
+  H3K27ac.SEs.ROSE.collapsed.Annotated[[name]] <- tmp.df 
+}
+
+#creo un dataframe unico
+Table.H3K27ac.SEs.ROSE.collapsed.Annotated <- data.frame()
+
+for (i in names(H3K27ac.SEs.ROSE.collapsed.Annotated)) {
+  Table.H3K27ac.SEs.ROSE.collapsed.Annotated <- bind_rows(Table.H3K27ac.SEs.ROSE.collapsed.Annotated, H3K27ac.SEs.ROSE.collapsed.Annotated[[i]])
+}
+
+Table.H3K27ac.SEs.ROSE.collapsed.Annotated <- na.omit(Table.H3K27ac.SEs.ROSE.collapsed.Annotated)
+
+Table.H3K27ac.SEs.ROSE.collapsed.Annotated |> dplyr::filter(Annotation == "Intergenic")
+```
+
+#H2BK120 SEs
+```{r}
+path = "/media/alessio/Data/hypoxia/ChIPseq/ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H2BK120ac"
+files = c("C1B_superEnhancer_ROSE_collapsed_HomerAnno_V44.txt",
+"C1E_superEnhancer_ROSE_collapsed_HomerAnno_V44.txt",
+"C1H_superEnhancer_ROSE_collapsed_HomerAnno_V44.txt",
+"C2B_superEnhancer_ROSE_collapsed_HomerAnno_V44.txt",
+"C2E_superEnhancer_ROSE_collapsed_HomerAnno_V44.txt",
+"C2H_superEnhancer_ROSE_collapsed_HomerAnno_V44.txt",
+"K125B1_superEnhancer_ROSE_collapsed_HomerAnno_V44.txt",
+"K125E1_superEnhancer_ROSE_collapsed_HomerAnno_V44.txt",
+"K125H1_superEnhancer_ROSE_collapsed_HomerAnno_V44.txt",
+"K26B1_superEnhancer_ROSE_collapsed_HomerAnno_V44.txt",
+"K26E1_superEnhancer_ROSE_collapsed_HomerAnno_V44.txt",
+"K26H1_superEnhancer_ROSE_collapsed_HomerAnno_V44.txt")
+
+H2BK120ac.SEs.ROSE.collapsed.Annotated <- list()
+
+for (i in files) {
+  name = str_remove(i, "_superEnhancer_ROSE_collapsed_HomerAnno_V44.txt")
+  tmp.path = file.path(path,i)
+  tmp.df = read.delim(tmp.path) |> 
+    dplyr::select("Chr", "Start", "End", "Annotation", "Gene.Name") |> 
+    dplyr::mutate(Annotation = str_remove(Annotation, "\\s*\\(.*\\)")) |> 
+    dplyr::mutate("Sample" = name)
+  H2BK120ac.SEs.ROSE.collapsed.Annotated[[name]] <- tmp.df 
+}
+
+#creo un dataframe unico
+Table.H2BK120ac.SEs.ROSE.collapsed.Annotated <- data.frame()
+
+for (i in names(H2BK120ac.SEs.ROSE.collapsed.Annotated)) {
+  Table.H2BK120ac.SEs.ROSE.collapsed.Annotated <- bind_rows(Table.H2BK120ac.SEs.ROSE.collapsed.Annotated, H2BK120ac.SEs.ROSE.collapsed.Annotated[[i]])
+}
+
+Table.H2BK120ac.SEs.ROSE.collapsed.Annotated <- na.omit(Table.H2BK120ac.SEs.ROSE.collapsed.Annotated)
+
+Table.H2BK120ac.SEs.ROSE.collapsed.Annotated |> dplyr::filter(Annotation == "Intergenic")
+```
+
+
+
+
+
+#Barplot
+```{r}
+Normoxia.H3K27ac <- c("C1A", "C2A", "K125A1", "K26A1")
+Normoxia.H2BK120ac <- c("C1B", "C2B", "K125B1", "K26B1")
+order = c("Intergenic", "TTS", "exon", "intron", "promoter-TSS")
+
+Table.H3K27ac.SEs.ROSE.collapsed.Annotated$Annotation <- factor(Table.H3K27ac.SEs.ROSE.collapsed.Annotated$Annotation, levels = order)
+Table.H2BK120ac.SEs.ROSE.collapsed.Annotated$Annotation <- factor(Table.H2BK120ac.SEs.ROSE.collapsed.Annotated$Annotation, levels = order)
+
+Peaks_barplot_fill <- function(df, subset, subtitle) {
+  df |> 
+    dplyr::filter(Sample %in% subset) |> 
+    ggplot(aes(y = Sample, fill = Annotation)) +
+    geom_bar(position = "fill", stat = "count", color = "black") +
+    # geom_text(aes(label = after_stat(count)),
+    #          stat = "count",
+    #          position = position_fill(vjust = 0.5),
+    #          color = "black",
+    #          size = 3) +
+  scale_x_continuous(name = "Percentage", labels = label_percent()) +
+  scale_fill_viridis_d(option = "A") +
+  theme_bw() +
+  labs(
+    title = "Super Enhancers Genomic Distribution",
+    subtitle = subtitle,
+    y = NULL,
+    fill = "Position"
+  )
+    
+}
+
+
+H3K27ac.SEs.ROSE.collapsed.Annotated.plot <- Peaks_barplot_fill(Table.H3K27ac.SEs.ROSE.collapsed.Annotated, Normoxia.H3K27ac, "H3K27ac")
+H3K27ac.SEs.ROSE.collapsed.Annotated.plot
+ggsave(H3K27ac.SEs.ROSE.collapsed.Annotated.plot, filename = "/media/alessio/Data/hypoxia/ChIPseq/Figure_paper/H3K27ac/H3K27ac_SEs_normoxia.png", dpi = 300, height = 6, width = 8)
+
+
+H2BK120ac.SEs.ROSE.collapsed.Annotated.plot <- Peaks_barplot_fill(Table.H2BK120ac.SEs.ROSE.collapsed.Annotated, Normoxia.H2BK120ac, "H2BK120ac")
+H2BK120ac.SEs.ROSE.collapsed.Annotated.plot
+ggsave(H2BK120ac.SEs.ROSE.collapsed.Annotated.plot, filename = "/media/alessio/Data/hypoxia/ChIPseq/Figure_paper/H2BK120ac/H2BK120ac_SEs_normoxia.png", dpi = 300, height = 6, width = 8)
+```
+
+
+#creo consensus tra i replicati (lo avevo già fatto prima in questo Rmd)
+```{r, warning=F}
+nomi <- c("Cas9_H0", "Cas9_H6", "Cas9_H24",".", ".", ".",
+           "H4KO_H0", "H4KO_H6", "H4KO_H24")
+
+MakeConsensusPeaksetRep <- function(list) {
+  Granges <- lapply(list, function(df) {
+    Gr <- makeGRangesFromDataFrame(df, keep.extra.columns = T)
+    return(Gr)
+  })
+  output <- list()
+  for (i in c(1:3, 7:9)) {
+    currentname <- nomi[[i]]
+    findOverlaps(Granges[[i]], Granges[[i+3]])
+    Overlapped <- subsetByOverlaps(Granges[[i]], Granges[[i+3]])
+     output[[currentname]] <- Overlapped
+  }
+  return(output)
+}
+
+H3K27ac.SEs.ROSE.collapsed.Annotated.Granges.ConsensusRep <- MakeConsensusPeaksetRep(H3K27ac.SEs.ROSE.collapsed.Annotated)
+H2BK120ac.SEs.ROSE.collapsed.Annotated.Granges.ConsensusRep <- MakeConsensusPeaksetRep(H2BK120ac.SEs.ROSE.collapsed.Annotated)
+```
+
+#estraggo solo gli esclusivi di H4KO
+```{r, warning=F}
+nomi <- c("H4KO_H0_exclusive", "H4KO_H6_exclusive", "H4KO_H24_exclusive")
+
+Exctract.H4KO.exclusive <- function(list) {
+  xclusive <- lapply(4:6, function(i)  {
+    subsetByOverlaps(list[[i]], list[[i-3]], invert = TRUE)
+  })
+  names(xclusive) <- nomi
+  return(xclusive)
+}
+
+H3K27ac.SEs.ROSE.H4KO.exclusive <- Exctract.H4KO.exclusive(H3K27ac.SEs.ROSE.collapsed.Annotated.Granges.ConsensusRep)
+H2BK120ac.SEs.ROSE.H4KO.exclusive <- Exctract.H4KO.exclusive(H2BK120ac.SEs.ROSE.collapsed.Annotated.Granges.ConsensusRep)
+```
+
+#estraggo gli esclusivi di Cas9
+```{r, warning=F}
+nomi <- c("Cas9_H0_exclusive", "Cas9_H6_exclusive", "Cas9_H24_exclusive")
+
+Exctract.Cas9.exclusive <- function(list) {
+  xclusive <- lapply(1:3, function(i)  {
+    subsetByOverlaps(list[[i]], list[[i+3]], invert = TRUE)
+  })
+  names(xclusive) <- nomi
+  return(xclusive)
+}
+
+H3K27ac.SEs.ROSE.Cas9.exclusive <- Exctract.Cas9.exclusive(H3K27ac.SEs.ROSE.collapsed.Annotated.Granges.ConsensusRep)
+H2BK120ac.SEs.ROSE.Cas9.exclusive <- Exctract.Cas9.exclusive(H2BK120ac.SEs.ROSE.collapsed.Annotated.Granges.ConsensusRep)
+```
+
+
+#salvo come bed files tutti i consensus (anche hypoxia) e gli esclusivi di H4KO sia per H3K27ac che per H2BK120ac (solo normoxia)
+```{r}
+write.bed <- function(list, path) {
+  for (i in names(list)) {
+    write.table(as.data.frame(list[[i]]), file = str_c(path,i,"_SEs.bed"), quote = F, row.names = F, col.names = F, sep = "\t")
+  }
+}
+
+write.bed(H3K27ac.SEs.ROSE.H4KO.exclusive, path = "/media/alessio/Data/hypoxia/ChIPseq/ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H3K27ac/")
+write.bed(H2BK120ac.SEs.ROSE.H4KO.exclusive, path = "/media/alessio/Data/hypoxia/ChIPseq/ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H2BK120ac/")
+write.bed(H3K27ac.SEs.ROSE.collapsed.Annotated.Granges.ConsensusRep, path = "/media/alessio/Data/hypoxia/ChIPseq/ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H3K27ac/")
+write.bed(H2BK120ac.SEs.ROSE.collapsed.Annotated.Granges.ConsensusRep, path = "/media/alessio/Data/hypoxia/ChIPseq/ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H2BK120ac/")
+write.bed(H3K27ac.SEs.ROSE.Cas9.exclusive, path = "/media/alessio/Data/hypoxia/ChIPseq/ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H3K27ac/")
+write.bed(H2BK120ac.SEs.ROSE.Cas9.exclusive, path = "/media/alessio/Data/hypoxia/ChIPseq/ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H2BK120ac/")
+```
+
+
+#overlap tra H3K27ac e H2BK120ac
+```{r}
+subsetByOverlaps(H3K27ac.SEs.ROSE.collapsed.Annotated.Granges.ConsensusRep$CAS9_normoxia, H2BK120ac.SEs.ROSE.collapsed.Annotated.Granges.ConsensusRep$CAS9_normoxia, invert = T)
+
+png(filename = "/media/alessio/Data/hypoxia/ChIPseq/Figure_paper/Cas9_SEs_marker_overlap.png", units = "cm", res = 300, height = 15, width = 15)
+makeVennDiagram(Peaks = list(H3K27ac.SEs.ROSE.collapsed.Annotated.Granges.ConsensusRep$CAS9_normoxia, H2BK120ac.SEs.ROSE.collapsed.Annotated.Granges.ConsensusRep$CAS9_normoxia),
+                NameOfPeaks = c("H3K27ac Cas9 normoxia", "H2BK120ac Cas9 normoxia"),
+                force.unique = F,
+                 col=c("black", 'black'),
+                fill = c("#F31365", "#91DA73"),
+                margin = 0.1)
+dev.off()
+png(filename = "/media/alessio/Data/hypoxia/ChIPseq/Figure_paper/H4KO_SEs_marker_overlap.png", units = "cm", res = 300, height = 15, width = 15)
+makeVennDiagram(Peaks = list(H3K27ac.SEs.ROSE.collapsed.Annotated.Granges.ConsensusRep$H4KO_normoxia, H2BK120ac.SEs.ROSE.collapsed.Annotated.Granges.ConsensusRep$H4KO_normoxia),
+                NameOfPeaks = c("H3K27ac H4KO normoxia", "H2BK120ac H4KO normoxia"),
+                force.unique = F,
+                 col=c("black", 'black'),
+                fill = c("#F31365", "#91DA73"),
+                margin = 0.1)
+dev.off()
+```
+
+
+
+
+
+
+#plot SEs e TEs H3K27ac (solo normoxia per ora)
+```{r}
+path_H3K27ac = "/media/alessio/Data/hypoxia/ChIPseq/ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H3K27ac"
+dir_H3K27ac = c("C1A", "C1D", "C1G",
+         "C2A", "C2D", "C2G",
+         "K125A1", "K125D1", "K125G1",
+         "K26A1", "K26D1", "K26G1")
+filename = "_peaks_AllEnhancers.table.txt"
+
+Enhancers.H3K27ac <- list()
+
+for (i in dir_H3K27ac) {
+  tmp.path = file.path(path_H3K27ac,i,paste0(i,filename))
+  tmp.df <- read.delim(tmp.path, skip = 5, header = T) |> 
+    dplyr::mutate(Signal = human_only_sorted.bam - input_human_only_sorted.bam) |> 
+    dplyr::mutate(Signal = ifelse(Signal > 0, Signal, 0)) |> 
+    dplyr::arrange(Signal)
+  Enhancers.H3K27ac[[i]] <- tmp.df
+}
+```
+
+#plot
+```{r}
+SEs.plot <- function(df, name) {
+  
+  TEs_count <- count(df$isSuper == 0)
+  SEs_count <- count(df$isSuper == 1)
+  
+  
+  
+  SEplot <- df |> 
+  ggplot(aes(x = seq_along(Signal), y = Signal)) +
+    geom_point(aes(color = as.character(isSuper)), size = 1.5) +
+    scale_colour_manual(values = c("black", "red")) +
+    # geom_
+    theme_bw() + 
+    labs(title = name,
+      y = "Signal",
+         x = NULL,
+         color = "Class:") +
+    annotate(geom = "label",
+             label = paste0("SEs: ",SEs_count,
+                            "\nTEs: ",TEs_count),
+             x = 5000, y = 300000, size = 4) +
+    theme(plot.title = element_text(size = 10),
+          axis.title.x = element_text(size = 8),
+          axis.title.y = element_text(size = 8),
+          legend.position = "none",
+          plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm"))
+  
+  return(SEplot)
+}  
+
+SEs.plots <- lapply(names(Enhancers.H3K27ac), function(name) {
+  plot <- SEs.plot(Enhancers.H3K27ac[[name]], name)
+})
+
+SEs_plot_grid_normoxia <- gridExtra::grid.arrange(grobs = SEs.plots[c(1,4,7,10)], ncol = 2, top=textGrob("H3K27ac Normoxia Enhancers"))
+
+ggsave(SEs_plot_grid_normoxia, filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/Enhancers_H3K27ac_normoxia_ROSE.png", dpi = 300, height = 6, width = 10)
+```
+
+#Venn diagram SEs H3K27ac normoxia
+```{r}
+path = "/media/alessio/Data/hypoxia/ChIPseq/ROSE_bed_files/H3K27ac"
+files.Normoxia = c("C1A", "C2A", "K125A1", "K26A1")
+extension = "_superEnhancer_ROSE.bed"
+
+Normoxia.H3K27ac.SEs.Granges <- list()
+
+for (i in files.Normoxia) {
+  tmp.path <- file.path(path,paste0(i,extension))
+  GR <- readPeakFile(tmp.path)
+  Normoxia.H3K27ac.SEs.Granges[[i]] <- GR
+  
+}
+
+
+# Overlaps <- findOverlapsOfPeaks(Normoxia.H3K27ac.SEs.Granges[[1]],
+#                     Normoxia.H3K27ac.SEs.Granges[[2]],
+#                     Normoxia.H3K27ac.SEs.Granges[[3]],
+#                     Normoxia.H3K27ac.SEs.Granges[[4]])
+# 
+# makeVennDiagram(Overlaps)
+pdf(file = "/media/alessio/Data/hypoxia/ChIPseq/Figure_paper/H3K27ac/Venn_normoxia_SEs_H3K27ac.pdf", height = 5, width = 6)
+Venn.SEs.H3K27ac.normoxia <- makeVennDiagram(Peaks = Normoxia.H3K27ac.SEs.Granges,
+                NameOfPeaks = c(names(Normoxia.H3K27ac.SEs.Granges)),
+                euler.d = T,
+                scaled=T,
+                fill = c("red", "red", "blue", "blue"),
+                alpha = c(0.3,0.3,0.3,0.3),
+                margin = 0.1)
+dev.off()
+```
+

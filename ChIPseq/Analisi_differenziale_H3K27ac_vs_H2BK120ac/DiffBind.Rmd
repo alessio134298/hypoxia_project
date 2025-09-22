@@ -1,0 +1,74 @@
+
+```{r}
+library(tidyverse)
+library(DiffBind)
+library(ChIPseeker)
+```
+
+
+```{r}
+Experiment_Cas9_only <- read_csv("../experiment.csv") |> 
+    dplyr::filter(Condition %in% c("H3K27AC", "H2BK120AC") & Tissue == "CAS9" & PeakCaller == "macs3")
+
+dba = DiffBind::dba(sampleSheet = Experiment_Cas9_only, scoreCol = 5, bRemoveRandom = TRUE, bRemoveM = T)
+```
+
+#COUNT e Normalizzazione
+```{r}
+Counts = DiffBind::dba.count(dba, bParallel = FALSE)
+
+Norm = dba.normalize(Counts)
+
+dba.plotPCA(Norm, attributes = DBA_CONDITION, label = DBA_FACTOR)
+```
+
+#Estraggo Count Matrix
+```{r}
+Matrix <- dba.peakset(Norm, bRetrieve = T, bRemoveRandom = T, DataType = "data.frame")
+```
+
+#Salvo Count matrix
+```{r}
+write_csv(Matrix, file = "Count_Matrix_norm.csv")
+```
+
+#Riassegno il design
+```{r}
+X <- Experiment_Cas9_only |> dplyr::mutate(Factor = str_c(Condition, Factor, sep = "_")) |> 
+    dplyr::select(Factor) |> unlist() |> as.vector()
+
+Norm$class[DBA_FACTOR,] = X
+```
+
+#Analisi differenziale
+```{r}
+Normoxia_H2_vs_H3 <- dba.contrast(Norm, design = ~ Factor, contrast = c("Factor", "H2BK120AC_CAS9_0h", "H3K27AC_CAS9_0h")) 
+Normoxia_H2_vs_H3 <- dba.analyze(Normoxia_H2_vs_H3)
+Normoxia_H2_vs_H3_report <- dba.report(Normoxia_H2_vs_H3, bUsePval = T) |> as.data.frame()
+
+H6_H2_vs_H3 <- dba.contrast(Norm, design = ~ Factor, contrast = c("Factor", "H2BK120AC_CAS9_6h", "H3K27AC_CAS9_6h")) 
+H6_H2_vs_H3 <- dba.analyze(H6_H2_vs_H3)
+H6_H2_vs_H3_report <- dba.report(H6_H2_vs_H3, bUsePval = T) |> as.data.frame()
+
+H24_H2_vs_H3 <- dba.contrast(Norm, design = ~ Factor, contrast = c("Factor", "H2BK120AC_CAS9_24h", "H3K27AC_CAS9_24h")) 
+H24_H2_vs_H3 <- dba.analyze(H24_H2_vs_H3)
+H24_H2_vs_H3_report <- dba.report(H24_H2_vs_H3, bUsePval = T) |> as.data.frame()
+```
+
+```{r}
+list <- list(Normoxia_H2_vs_H3_report = Normoxia_H2_vs_H3_report,
+            H6_H2_vs_H3_report = H6_H2_vs_H3_report,
+            H24_H2_vs_H3_report = H24_H2_vs_H3_report)
+
+openxlsx::write.xlsx(list, file = "Results_pval_H2BK120ac_vs_H3K27ac.xlsx")
+```
+
+```{r}
+Normoxia_H2_vs_H3_report |>
+    dplyr::filter(p.value < 0.05) |> 
+    dplyr::arrange(desc(Fold))
+
+H24_H2_vs_H3_report |> 
+    dplyr::filter(FDR < 0.05) |> 
+      dplyr::arrange(desc(Fold)) 
+```

@@ -1,0 +1,438 @@
+```{r setup, echo = FALSE}
+library(DiffBind)
+library(tidyverse)
+library(ggplot2)
+library(ChIPseeker)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(clusterProfiler)
+library(AnnotationHub)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(xlsx)
+library(GenomicRanges)
+library(rtracklayer)
+library(VennDiagram)
+library(ChIPpeakAnno)
+```
+
+#Preprocessing
+```{r}
+coldata = read.csv("/media/alessio/Data/hypoxia/ChIPseq/experiment.csv") |> 
+  dplyr::filter(Condition == "H2BK120AC")
+
+
+ChIP <- dba(sampleSheet=coldata, scoreCol = 5)
+
+plot(ChIP)
+
+ChIP <- dba.count(ChIP, bUseSummarizeOverlaps = TRUE, bParallel = FALSE)
+```
+
+#normalization
+```{r}
+ChIP_normalized <- dba.normalize(ChIP, normalize="RLE", library = DBA_LIBSIZE_PEAKREADS)
+
+#provare dba_norm_lib
+ChIP_normalized_libfull <- dba.normalize(ChIP, library = DBA_LIBSIZE_FULL)
+
+#png(filename = "/media/alessio/Data/hypoxia/ChIPseq/Figure_paper/H2BK120ac_DiffBind_PCA_noNames.png", res = 300, units = "cm", height = 13, width = 13)
+#PCA_diffbind <- dba.plotPCA(ChIP_normalized, alpha = 0.7, attributes = DBA_TISSUE, label=DBA_ID, vColors = c("#69B437", "#0E3338"))
+PCA_diffbind <- dba.plotPCA(ChIP_normalized, alpha = 0.7, attributes = DBA_TISSUE, vColors = c("#69B437", "#0E3338"))
+#dev.off()
+
+#png(filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/H2BK120ac_DiffBind_SDist.png", res = 300, units = "cm", height = 18, width = 18)
+SDIST <- plot(ChIP_normalized)
+#dev.off()
+
+
+#con libfull
+dba.plotPCA(ChIP_normalized_libfull, color = DBA_TREATMENT, label=DBA_ID)
+```
+
+#results
+```{r}
+#setting del contrast
+Diff_peaks_contrast <- list(Normoxia_H4KO_vs_CAS9 = (Normoxia_H4KO_vs_CAS9 <- dba.contrast(ChIP_normalized,
+                                                                                  design = ~ Factor, contrast = c("Factor", "H4KO_0h", "CAS9_0h"))),
+                  H6_H4KO_vs_CAS9 = (H6_H4KO_vs_CAS9 <- dba.contrast(ChIP_normalized,
+                                                                     design = ~ Factor, contrast = c("Factor", "H4KO_6h", "CAS9_6h"))),
+                  H24_H4KO_vs_CAS9 = (H24_H4KO_vs_CAS9 <- dba.contrast(ChIP_normalized,
+                                                                       design = ~ Factor, contrast = c("Factor", "H4KO_24h", "CAS9_24h")))
+ 
+                                                      )
+#calcolo dei picchi differenziali
+Diff_peaks_analyze <- lapply(Diff_peaks_contrast, function(analyze) {
+  analyzed <- dba.analyze(analyze)
+  return(analyzed)
+})
+
+for (i in Diff_peaks_analyze) {
+  show <- dba.show(i, bContrasts=TRUE)
+  print(show)
+  rm(i, show)
+}
+```
+
+#info
+```{r}
+info <- dba.show(Diff_peaks_analyze$Normoxia_H4KO_vs_CAS9)
+libsizes <- cbind(LibReads=info$Reads, FRiP=info$FRiP, PeakReads=round(info$Reads * info$FRiP))
+rownames(libsizes) <- info$ID
+libsizes
+
+norm <- dba.normalize(ChIP_normalized, bRetrieve=TRUE)
+norm
+```
+
+#Volcano, Heatmap, Boxplot, Venn, MA
+```{r}
+for (i in Diff_peaks_analyze) {
+  MA <- dba.plotMA(i, contrast = 1)
+  print(MA)
+  rm(i, MA)
+}
+
+for (i in seq_along(Diff_peaks_analyze)) {
+  namevenn <- names(Diff_peaks_analyze)[i]
+  namevenn <- str_extract(namevenn, ("Normoxia|H\\d{1,2}"))
+  # png(filename = paste0("/media/alessio/Data/hypoxia/ChIPseq/plot/","H2BK120ac_Venn_Diffbind_",namevenn,".png"),
+  #     res = 300, units = "cm", height = 20, width = 20)
+  Venn <- dba.plotVenn(Diff_peaks_analyze[[i]], contrast = 1, bDB = TRUE, bGain = TRUE, bLoss = TRUE, bAll = FALSE, bUsePval = T,
+                       main = paste0("H2BK120ac\n",namevenn))
+  #dev.off()
+}
+
+#Volcano
+for (i in seq_along(Diff_peaks_analyze)) {
+  nameVolc <- names(Diff_peaks_analyze)[i]
+  nameVolc <- str_extract(nameVolc, ("Normoxia|H\\d{1,2}"))
+  #png(filename = paste0("/media/alessio/Data/hypoxia/ChIPseq/plot/","H2BK120ac_Volcano_Diffbind_",nameVolc,".png"),
+  #    res = 300, units = "cm", height = 20, width = 20)
+  Volcano <- dba.plotVolcano(Diff_peaks_analyze[[i]],
+                       bLabels = F, th = 0.05)
+  #dev.off()
+}
+
+
+#Heatmap
+hmap <- colorRampPalette(c("purple", "black", "green"))(n = 13)
+
+for (i in seq_along(Diff_peaks_analyze)) {
+  nameheat = names(Diff_peaks_analyze)[i]
+  nameheat = str_extract(nameheat, ("Normoxia|H\\d{1,2}"))
+  #png(filename = paste0("/media/alessio/Data/hypoxia/ChIPseq/plot/","H2BK120ac_Hmap_Diffbind_",nameheat,".png"), 
+  #    res = 300, units = "cm", height = 20, width = 20)
+  Heat <- dba.plotHeatmap(Diff_peaks_analyze[[i]], contrast = 1, correlations=FALSE, scale="row", colScheme = hmap,
+                          main = str_c("H2BK120ac HDAC4 KO vs control\n",nameheat))
+  #dev.off()
+}
+
+#Boxplot
+
+for (i in seq_along(Diff_peaks_analyze)) {
+  nameBox = names(Diff_peaks_analyze)[i]
+  nameBox = str_extract(nameBox, ("Normoxia|H\\d{1,2}"))
+  #png(filename = paste0("/media/alessio/Data/hypoxia/ChIPseq/plot/","H2BK120ac_Boxplot_Diffbind_",nameBox,".png"), 
+  #    res = 300, units = "cm", height = 20, width = 20)
+  Box <- dba.plotBox(Diff_peaks_analyze[[i]], contrast = 1)
+  #dev.off()
+}
+```
+
+#report picchi differenziali
+```{r}
+#report dei picchi differenziali significativi
+Diff_peaks_report_sign <- lapply(Diff_peaks_analyze, function(analyze) {
+  report <- dba.report(analyze, bUsePval = T)
+  return(report)
+})
+
+#report di tutti i picchi 
+Diff_peaks_report_all <- lapply(Diff_peaks_analyze, function(analyze) {
+  report <- dba.report(analyze, th = 1)
+  return(report)
+})
+Diff_peaks_report_sign$H24_H4KO_vs_CAS9
+
+```
+
+#ChIPseeker
+#annotatepeak
+```{r}
+#txdb <- makeTxDbFromGFF("/media/alessio/Data/genome110/gencode/gencode.v44.annotation.gtf")
+txdb = TxDb.Hsapiens.UCSC.hg38.knownGene
+
+#leggo i picchi dal report di diffbind picchi significativi
+Peaks_annotation_sign <- lapply(Diff_peaks_report_sign, function(annopeak) {
+  annodf <- annotatePeak(
+    annopeak,
+    tssRegion = c(-3000, 3000),
+    TxDb = txdb,
+    level = "gene",
+    flankDistance = 5000,
+    columns = c("ENTREZID", "ENSEMBL", "SYMBOL", "GENENAME"),
+    annoDb = "org.Hs.eg.db"
+  )
+  return(annodf)
+})
+
+for (i in seq_along(Peaks_annotation_sign)) {
+  nameanno <- names(Peaks_annotation_sign)[i]
+  nameanno <- str_extract(nameanno, ("Normoxia|H\\d{1,2}"))
+  annobar <- plotAnnoBar(Peaks_annotation_sign[[i]], title = str_c("H2BK120ac peak distribution H4KO vs CAS9 ",nameanno))
+  print(annobar)
+  #ggsave(annobar, filename = paste0("/media/alessio/Data/hypoxia/ChIPseq/plot/H2BK120ac_DiffBind_Annobar_",nameanno,".png"), dpi = 300, height = 4, width = 12)
+}
+
+#su tutti i picchi
+Peaks_annotation_all <- lapply(Diff_peaks_report_all, function(annopeak) {
+  annodf <- annotatePeak(
+    annopeak,
+    tssRegion = c(-3000, 3000),
+    TxDb = txdb,
+    level = "gene",
+    flankDistance = 5000,
+    columns = c("ENTREZID", "ENSEMBL", "SYMBOL", "GENENAME"),
+    annoDb = "org.Hs.eg.db"
+  )
+  return(annodf)
+})
+
+#trasformo in dataframe per salvarlo a csv
+Peaks_annotation_all_df <- lapply(Peaks_annotation_all, function(df) {
+  dframe <- as.data.frame(df@anno)
+  return(dframe)
+})
+
+#trasformo in dataframe per salvarlo a csv
+Peaks_annotation_sign_df <- lapply(Peaks_annotation_sign, function(df) {
+  dframe <- as.data.frame(df@anno)
+  return(dframe)
+})
+```
+
+#salvo in excel
+```{r}
+openxlsx::write.xlsx(Peaks_annotation_all_df, file = "/media/alessio/Data/hypoxia/ChIPseq/tables/H2BK120ac_tables/H2BK120ac_Diff_bind_peak_annotation_hg38.xlsx")
+openxlsx::write.xlsx(Peaks_annotation_sign_df, file = "/media/alessio/Data/hypoxia/ChIPseq/tables/H2BK120ac_tables/H2BK120ac_Diff_bind_peak_annotation_significative_Differential_hg38.xlsx")
+```
+
+
+#ORA sui geni vicini ai picchi differenziali
+```{r}
+GO_enrich_sign_peaks <- lapply(Peaks_annotation_sign, function(ORA) {
+  UP <- as.data.frame(ORA) |> dplyr::filter(Fold > 0)
+  enr <- enrichGO(gene = UP$SYMBOL,
+                  OrgDb = org.Hs.eg.db,
+                  keyType = "SYMBOL",
+                  ont  = "BP",
+                  pAdjustMethod = "BH",
+                  qvalueCutoff  = 0.05
+  )
+  return(enr)
+})
+
+for (i in names(GO_enrich_sign_peaks)) {
+  name <- gsub("_", " ", i)
+  dotplot <- dotplot(GO_enrich_sign_peaks[[i]], showCategory=20, color = "p.adjust") +
+    labs(title = "GO enrichment",
+         subtitle = name)
+  #ggsave(plot = dotplot, filename = paste0("/media/alessio/Data/hypoxia/RNAseq/plot/ORA/","GO_enr_HDAC4_exclusive ",name,".png"), dpi = 300, height = 12, width = 9)
+  print(dotplot)
+}
+
+
+dp <- dotplot(GO_enrich_sign_peaks$H24_H4KO_vs_CAS9, showCategory = 20, color = "p.adjust") + 
+  ggtitle("H2BK120ac 24h H4KO vs CAS9 GO BP")
+#ggsave(dp, filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/H2BK120ac_24h_H4KO_vs_CAS9_GO_BP.png", dpi = 300, height = 12, width = 9)
+```
+
+
+#faccio una prova, voglio vedere se gli esculsivi che ho calcolato con bedtools intersect si overlappano con i differenziali di DiffBind
+```{r}
+H4KO_exclusive_24h <- read.delim("/media/alessio/Data/hypoxia/ChIPseq/intersection/H2BK120AC/H4KO_H24_diffpeaks_HomerAnnotation.txt") |>
+  dplyr::rename(Peak_ID = 1) |> 
+    dplyr::mutate(Annotation = str_remove(Annotation, "\\s*\\(.*\\)")) |> 
+    dplyr::mutate(Detailed.Annotation = str_remove(Detailed.Annotation, "\\s*\\(.*\\)")) |> 
+  dplyr::select(Gene.Name) |> 
+  unlist()
+
+h4KO_exclusive_24h_Diffbind <- read.xlsx("/media/alessio/Data/hypoxia/ChIPseq/tables/H2BK120ac_Diff_bind_peak_annotation_significative_Differential.xlsx", sheetIndex = 3) |> 
+  dplyr::filter(Fold >= 0) |> 
+  dplyr::select(SYMBOL) |>  unlist()
+```
+
+#Venn
+```{r}
+VENN <- function(x, y) {
+  #xname <- names(x)
+  #yname <- names(y)
+  xname <- deparse(substitute(x))
+  yname <- deparse(substitute(y))
+  #xname <- "Homer"
+  #yname <- "DiffBind"
+  #timename <- sub(".*_(\\d+h)$", "\\1", xname)
+  venn.diagram(
+  x = list(x, y),
+  category.names = c(xname, yname),
+  filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/H2BK120ac_HomerxDiffbind_consensus_24H.png",
+  col=c("white", 'white'),
+  disable.logging = T,
+  fill = c(alpha("#4361ee",0.7), alpha('#b5179e',0.7)),
+  height = 480 , 
+  width = 580 , 
+  resolution = 300,
+  compression = "lzw",
+          lwd = 1,
+  cex = 0.5,
+  fontfamily = "sans",
+  cat.cex = 0.3,
+  cat.default.pos = "outer",
+          cat.pos = c(-27, 27),
+          cat.dist = c(0.055, 0.055),
+          cat.fontfamily = "sans",
+  main = "H2BK120ac_HomerxDiffbind_consensus_24H",
+  main.cex = 0.3,
+  main.fontfamily = "sans",
+  #main.pos = c(-0.001, 1),
+  output=TRUE,
+  imagetype = "png",
+  margin = 0.02
+)
+}
+
+VENN(H4KO_exclusive_24h, h4KO_exclusive_24h_Diffbind)
+#danno risultati molto diversi
+```
+
+
+
+
+
+
+#Vs normoxia
+```{r}
+Vs_normoxia_Diff_peaks_contrast <- list(
+  CAS9_6h = (CAS9_6h <- dba.contrast(ChIP_normalized, design = ~ Factor, contrast = c("Factor", "CAS9_6h", "CAS9_0h"))),
+  CAS9_24h = (CAS9_24h <- dba.contrast(ChIP_normalized, design = ~ Factor, contrast = c("Factor", "CAS9_24h", "CAS9_0h"))),
+  H4KO_6h = (H4KO_6h <- dba.contrast(ChIP_normalized, design = ~ Factor, contrast = c("Factor", "H4KO_6h", "H4KO_0h"))),
+  H4KO_24h = (H4KO_24h <- dba.contrast(ChIP_normalized, design = ~ Factor, contrast = c("Factor", "H4KO_24h", "H4KO_0h")))
+ )
+
+#calcolo dei picchi differenziali
+Vs_normoxia_analyzed_DiffPeaks <- lapply(Vs_normoxia_Diff_peaks_contrast, function(contrast) {
+  analyzed <- dba.analyze(contrast)
+  return(analyzed)
+})
+
+for (i in Vs_normoxia_analyzed_DiffPeaks) {
+  show <- dba.show(i, bContrasts=TRUE)
+  print(show)
+  rm(i, show)
+}
+
+Vs_normoxia_report_DiffPeaks <- lapply(Vs_normoxia_analyzed_DiffPeaks, function(df) {
+  report <- dba.report(df, bUsePval = T)
+  return(report)
+})
+
+Vs_normoxia_report_DiffPeaks_total <- lapply(Vs_normoxia_analyzed_DiffPeaks, function(df) {
+  report <- dba.report(df, th = 1)
+  return(report)
+})
+
+```
+
+#plot
+```{r}
+for (i in names(Vs_normoxia_analyzed_DiffPeaks)) {
+   png(filename = paste0("/media/alessio/Data/hypoxia/ChIPseq/plot/","H2BK120ac_Venn_Diffbind_pval",i,".png"),
+   res = 300, units = "cm", height = 20, width = 20)
+  Venn <- dba.plotVenn(Vs_normoxia_analyzed_DiffPeaks[[i]], contrast = 1, bDB = TRUE, bGain = TRUE, bLoss = TRUE, bAll = FALSE, main = i, bUsePval = T)
+  dev.off()
+  # print(Venn)
+}
+
+for (i in names(Vs_normoxia_analyzed_DiffPeaks)) {
+  Volcano <- dba.plotVolcano(Vs_normoxia_analyzed_DiffPeaks[[i]], th = 0.05)
+  # print(Venn)
+}
+
+for (i in names(Vs_normoxia_analyzed_DiffPeaks)) {
+  Heatmap <- dba.plotHeatmap(Vs_normoxia_analyzed_DiffPeaks[[i]], contrast =1, correlations = F, colScheme = hmap, main = i, scale = "row", bUsePval = T)
+  # print(Venn)
+}
+```
+
+#Annotation 
+```{r}
+#txdb = makeTxDbFromGFF("/media/alessio/Data/genome110/gencode/gencode.v44.annotation.gtf")
+txdb = TxDb.Hsapiens.UCSC.hg38.knownGene
+
+Vs_normoxia_report_DiffPeaks_significative_annotations <- lapply(Vs_normoxia_report_DiffPeaks, function(annopeak) {
+   annodf <- annotatePeak(
+    annopeak,
+    tssRegion = c(-3000, 3000),
+    TxDb = txdb,
+    level = "gene",
+    flankDistance = 5000,
+    columns = c("ENTREZID", "ENSEMBL", "SYMBOL", "GENENAME"),
+    annoDb = "org.Hs.eg.db"
+  )
+  return(annodf)
+   })
+
+Vs_normoxia_report_DiffPeaks_total_annotations <- lapply(Vs_normoxia_report_DiffPeaks_total, function(annopeak) {
+   annodf <- annotatePeak(
+    annopeak,
+    tssRegion = c(-3000, 3000),
+    TxDb = txdb,
+    level = "gene",
+    flankDistance = 5000,
+    columns = c("ENTREZID", "ENSEMBL", "SYMBOL", "GENENAME"),
+    annoDb = "org.Hs.eg.db"
+  )
+  return(annodf)
+   })
+
+Vs_normoxia_report_DiffPeaks_total_annotations_Dataframe <- lapply(Vs_normoxia_report_DiffPeaks_total_annotations, function(df) {
+  df_anno <- as.data.frame(df)
+  return(df_anno)
+})
+
+
+Vs_normoxia_report_DiffPeaks_significative_annotations_Dataframe <- lapply(Vs_normoxia_report_DiffPeaks_significative_annotations, function(df) {
+  df_anno <- as.data.frame(df)
+  return(df_anno)
+})
+```
+
+#salvo in excel
+```{r}
+openxlsx::write.xlsx(Vs_normoxia_report_DiffPeaks_significative_annotations_Dataframe, file = "/media/alessio/Data/hypoxia/ChIPseq/tables/H2BK120ac_tables/Vs_normoxia/H2BK120ac_vs_normoxia_significative_hg38.xlsx")
+openxlsx::write.xlsx(Vs_normoxia_report_DiffPeaks_total_annotations_Dataframe, file = "/media/alessio/Data/hypoxia/ChIPseq/tables/H2BK120ac_tables/Vs_normoxia/H2BK120ac_vs_normoxia_total_hg38.xlsx")
+```
+
+#Overlap tra UP Cas9 e HDAC4 KO
+```{r}
+Venn.diagram.UP.Peaks <- function(GR1, GR2) {
+  UP.CAS9 <- as.data.frame(GR1) |> 
+    dplyr::filter(Fold > 0)
+  UP.CAS9.Granges <- makeGRangesFromDataFrame(UP.CAS9)
+  
+    UP.H4KO <- as.data.frame(GR2) |> 
+    dplyr::filter(Fold > 0)
+  UP.H4KO.Granges <- makeGRangesFromDataFrame(UP.H4KO)
+  
+  Venn <- makeVennDiagram(Peaks = list(UP.CAS9.Granges, UP.H4KO.Granges),
+                          NameOfPeaks = c("UP Cas9 24h", "UP H4KO 24h"),
+                          margin = 0.1)
+  print(Venn)
+  
+}
+
+png(filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/H2BK120ac_Vs_normoxia_intersection_24h.png", units = "cm", height = 10, width = 13, res = 300)
+Venn.diagram.UP.Peaks(Vs_normoxia_report_DiffPeaks$CAS9_24h, Vs_normoxia_report_DiffPeaks$H4KO_24h)
+dev.off()
+```
+

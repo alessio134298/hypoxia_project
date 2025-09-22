@@ -1,0 +1,125 @@
+```{r}
+library(tidyverse)
+library(scales)
+```
+
+#spike-in amount e ratio (plot)
+```{r}
+report_reads <- read.csv("/media/alessio/Data/hypoxia/ChIPseq/report_reads.csv", header = F) |> 
+  rename(samplename = V1, ID = V2, Drosophila_reads = V3, Human_reads = V4) |> 
+  mutate(samplename = str_replace_all(samplename, " ", "_")) |> 
+  mutate(ratio = (Drosophila_reads / (Drosophila_reads + Human_reads)) ) |> 
+  filter(!is.na(Drosophila_reads)) |> 
+  mutate(marker = str_extract(samplename,  "[^_]+$")) |> 
+  mutate(line = case_when(
+    str_detect(samplename, "CAS9") ~ "CAS9",
+    str_detect(samplename, "HDAC4") ~ "HDAC4_KO"))
+
+report_reads |> 
+  group_by(marker) |> 
+  summarise(median_value = median(Drosophila_reads))
+
+
+options(scipen = 999)
+Spike_in_boxplot <- report_reads |> 
+  ggplot(aes(x = marker, y = Drosophila_reads, fill = marker)) +
+  geom_boxplot() +
+  geom_point(aes(shape = line), size = 2) +
+  scale_fill_brewer(palette = 3) +
+  scale_y_continuous(labels = seq(0, 400000, by = 25000),
+                     breaks = seq(0, 400000, by = 25000)) +
+  labs(title = "Spike-in reads count",
+    x = NULL,
+    y = "Drosophila reads",
+    fill = "Histone marker",
+    shape = "Line"
+  ) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))
+  
+#ggsave(plot = Spike_in_boxplot, filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/Spike_in_boxplot.png", dpi = 300, height = 6, width = 6)
+
+Spike_in_boxplot_percentage <- report_reads |> 
+  ggplot(aes(x = marker, y = ratio, fill = marker)) +
+  geom_boxplot() +
+  geom_point(aes(shape = line), size = 2) +
+  scale_fill_brewer(palette = 3) +
+  scale_y_continuous(labels = label_percent()) +
+  labs(title = "Spike-in percentage",
+    x = NULL,
+    y = "Drsosphila reads/Human reads (%)",
+    fill = "Histone marker",
+    shape = "Line"
+  ) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+#ggsave(plot = Spike_in_boxplot_percentage, filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/Spike_in_boxplot_percentage.png", dpi = 300, height = 6, width = 6)
+
+
+report_reads |> 
+  dplyr::filter(str_detect(samplename, "H3K27AC")) |> 
+  dplyr::mutate(line = case_when(
+    str_detect(samplename, "CAS9") ~ "CAS9",
+    str_detect(samplename, "HDAC4_KO") ~ "H4KO"
+  )) |> 
+  group_by(line) |> 
+  summarise(max = max(Drosophila_reads))
+
+
+Barplot_spike_in_H3K27ac <- report_reads |> 
+  dplyr::filter(marker == "H3K27AC") |> 
+  ggplot(aes(x = ID, y = Drosophila_reads)) +
+  geom_col()
+Barplot_spike_in_H3K27ac
+```
+
+#coldata (experiment design)
+```{r}
+coldata <- readxl::read_excel("/media/alessio/Data/hypoxia/CAMPIONI INVIATI CODICI chipseq.xlsx") |> 
+  dplyr::select(esperimento, 'SAMPLE ID') |> 
+  dplyr::rename(experiment = esperimento, sampleID = 'SAMPLE ID') |> 
+  dplyr::mutate(experiment = str_replace_all(experiment, " ", "_")) |> 
+  mutate(IP = case_when(
+    str_detect(experiment, "H3K27AC") ~ "H3K27AC",
+    str_detect(experiment, "H2BK120AC") ~ "H2BK120AC",
+    str_detect(experiment, "H3K4ME1") ~ "H3K4ME1",
+    str_detect(experiment, "INPUT") ~ "input"
+  )) |> 
+  mutate(line = case_when(
+    str_detect(experiment, "CAS9") ~ "CAS9",
+    str_detect(experiment, "HDAC4_KO") ~ "H4KO"
+  )) |> 
+  dplyr::filter(sampleID != c("K26F1", "K26I1")) # i due campioni mancanti
+
+write.csv(coldata, "/media/alessio/Data/hypoxia/ChIPseq/experiment.csv")
+
+coldata <- read.csv("/media/alessio/Data/hypoxia/ChIPseq/experiment.csv") |> 
+  dplyr::mutate(path = paste0("/media/alessio/Data/hypoxia/ChIPseq/",path,"/",sampleID,"_peaks.narrowPeak")) |> 
+  dplyr::rename(Peaks = path) |> 
+  dplyr::select(!1) |> 
+  dplyr::mutate(PeakCaller = "macs3")
+
+write.csv(coldata, "/media/alessio/Data/hypoxia/ChIPseq/experiment.csv", row.names = F)
+
+coldata <- read.csv("/media/alessio/Data/hypoxia/ChIPseq/experiment.csv") |> 
+  dplyr::mutate(bamControl = sub("/[^/]*$", "", bamControl)) |> 
+  dplyr::mutate(bamControl = paste0(bamControl,"/human_only_sorted.bam")) |> 
+  dplyr::mutate(bamReads = sub("/[^/]*$", "", bamControl)) |> 
+  dplyr::mutate(bamReads = paste0(bamReads,"/human_only_sorted.bam")) |> 
+  dplyr::relocate(c(bamReads, ControlID, bamControl), .before = Peaks)
+
+write.csv(coldata, "/media/alessio/Data/hypoxia/ChIPseq/experiment.csv")
+
+coldata <- coldata |> 
+  mutate(bamReads = paste0)
+
+
+write.csv(coldata, "/media/alessio/Data/hypoxia/ChIPseq/experiment.csv", row.names = F)
+```
+
+```{r}
+report_reads |> 
+  dplyr::filter(marker == "H3K27AC")
+```
+

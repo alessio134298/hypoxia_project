@@ -1,0 +1,1002 @@
+```{r setup, echo = F}
+library(tidyverse)
+library(DiffBind)
+library(ChIPseeker)
+library(gridExtra)
+library(grid)
+library(GenomicFeatures)
+library(pheatmap)
+```
+
+
+#H3K27ac
+
+#prima di tutto sistemo gli output di ROSE per renderli utilizzabili da DiffBind
+```{r}
+pathx = "/media/alessio/Data/hypoxia/ChIPseq/ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H3K27ac"
+dirs = c("C1A", "C1D", "C1G", "C2A", "C2D", "C2G", "K125A1", "K125D1", "K125G1", "K26A1", "K26D1", "K26G1")
+file = "_peaks_SuperEnhancers.table.txt"
+
+ROSE.SEs.tables <- list()
+
+
+
+#useremo come Score value "NUM LOCI", che sarà la quarta colonna
+for (i in dirs) {
+  tmp.path = file.path(pathx,i,paste0(i,file))
+  tmp.table = read.delim(tmp.path, skip = 5, header = T) |> 
+    dplyr::select("CHROM", "START", "STOP", "NUM_LOCI", "enhancerRank")
+    
+  ROSE.SEs.tables[[i]] <- tmp.table
+}
+
+#salviamo i file come bed
+for (i in names(ROSE.SEs.tables))  {
+  write.table(ROSE.SEs.tables[[i]], file = paste0(pathx,"/",i,"/",paste0(i,"_superEnhancer_ROSE.bed")), col.names = F, sep = "\t", row.names = F, quote = F)
+}
+```
+
+#calcolo temporaneamente la lunghezza media dei picchi dei ses, in modo da definirne meglio l'ampiezza
+```{r}
+dftot <- tibble()
+
+for (i in names(ROSE.SEs.tables)) {
+  dftot <- bind_rows(dftot, ROSE.SEs.tables[[i]])
+}
+
+dftot |> 
+  dplyr::mutate(width = STOP - START) |> 
+  dplyr::arrange(desc(width)) |> 
+  ggplot(aes(x = seq_along(width), y = log1p(width))) + 
+  geom_col()
+
+SEs.width <- dftot |> 
+  dplyr::mutate(width = STOP - START) |> 
+  dplyr::select(width) |> 
+  unlist()
+
+qqnorm(log1p(SEs.width))
+
+shapiro.test(log1p(SEs.width))
+
+dftot |> 
+  dplyr::mutate(width = STOP - START) |> 
+  summarise(avg = mean(width),
+            median = median(width))
+```
+
+
+#carico samplesheet e lo modifico inserendo i bed files dei super enhancers
+```{r}
+coldata.SEs.H3K27ac = read.csv("/media/alessio/Data/hypoxia/ChIPseq/experiment.csv") |>
+  dplyr::filter(Condition == "H3K27AC" & PeakCaller == "macs3") |>
+  dplyr::mutate(
+    Peaks = paste0(
+      "/media/alessio/Data/hypoxia/ChIPseq/ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H3K27ac/",
+      SampleID,
+      "/",
+      paste0(SampleID, "_superEnhancer_ROSE.bed")
+    )
+  ) |>
+  dplyr::mutate(PeakCaller = "bed")
+```
+
+#Counts
+```{r}
+dba.SEs.H3K27ac <- dba(sampleSheet = coldata.SEs.H3K27ac, scoreCol = 4)
+
+plot(dba.SEs.H3K27ac)
+
+#dba.counts.SEs.H3K27ac <- dba.count(dba.SEs.H3K27ac, bParallel = FALSE)
+dba.counts.SEs.H3K27ac.summits35000 <- dba.count(dba.SEs.H3K27ac, bParallel = FALSE, summits = 35000)
+```
+
+#normalizzazione
+```{r}
+# dba.normalized.SEs.H3K27ac <- dba.normalize(dba.counts.SEs.H3K27ac,
+#                                             normalize = "RLE",
+#                                             library = DBA_LIBSIZE_PEAKREADS)
+# 
+# dba.plotPCA(dba.normalized.SEs.H3K27ac,
+#             color = DBA_TREATMENT,
+#             label = DBA_ID)
+
+dba.normalized.SEs.H3K27ac.summits35000 <- dba.normalize(dba.counts.SEs.H3K27ac.summits35000,
+                                            normalize = "RLE",
+                                            library = DBA_LIBSIZE_PEAKREADS)
+
+dba.plotPCA(dba.counts.SEs.H3K27ac.summits35000,
+            color = DBA_TREATMENT,
+            label = DBA_ID)
+
+# plot(dba.normalized.SEs.H3K27ac)
+plot(dba.normalized.SEs.H3K27ac.summits35000)
+```
+
+#estraggo matrice
+```{r}
+Enrichment.matrix.SEs.H3K27ac <- dba.peakset(dba.normalized.SEs.H3K27ac.summits35000, bRetrieve = T, DataType = DBA_DATA_FRAME)
+```
+
+
+#Analisi differenziale H4KO vs CAS9
+```{r}
+#setting del contrast
+Contrasts.SEs.H3K27ac <- list(
+  Normoxia_H4KO_vs_CAS9 = dba.contrast(
+    dba.normalized.SEs.H3K27ac.summits35000,
+    design = ~ Factor,
+    contrast = c("Factor", "H4KO_0h", "CAS9_0h")
+  ),
+  H6_H4KO_vs_CAS9 = dba.contrast(
+    dba.normalized.SEs.H3K27ac.summits35000,
+    design = ~ Factor,
+    contrast = c("Factor", "H4KO_6h", "CAS9_6h")
+  ),
+  H24_H4KO_vs_CAS9 = dba.contrast(
+    dba.normalized.SEs.H3K27ac.summits35000,
+    design = ~ Factor,
+    contrast = c("Factor", "H4KO_24h", "CAS9_24h")
+  )
+)
+
+#calcolo dei picchi differenziali
+Differential.binding.SEs.H3K27ac <- lapply(Contrasts.SEs.H3K27ac, function(analyze) {
+  analyzed <- dba.analyze(analyze)
+  return(analyzed)
+})
+
+for (i in Differential.binding.SEs.H3K27ac) {
+  show <- dba.show(i, bContrasts = TRUE)
+  print(show)
+  rm(i, show)
+}
+
+for (i in names(Differential.binding.SEs.H3K27ac)) {
+  Volcano <- dba.plotVolcano(Differential.binding.SEs.H3K27ac[[i]])
+  Venn <- dba.plotVenn(
+    Differential.binding.SEs.H3K27ac[[i]],
+    contrast = 1,
+    bDB = TRUE,
+    bGain = TRUE,
+    bLoss = TRUE,
+    bAll = FALSE
+  )
+  print(Volcano)
+  print(Venn)
+}
+```
+
+#report
+```{r}
+#report di tutti i picchi 
+Report.Differential.binding.SEs.H3K27ac <- lapply(Differential.binding.SEs.H3K27ac, function(analyze) {
+  report <- dba.report(analyze, th = 1)
+  return(report)
+})
+```
+
+#Annotazione
+```{r}
+txdb <- makeTxDbFromGFF("/media/alessio/Data/genome110/gencode/gencode_V44.gff")
+
+Report.Differential.binding.SEs.H3K27ac.Annotated.df <- lapply(Report.Differential.binding.SEs.H3K27ac, function(df) {
+  Anno <- as.data.frame(annotatePeak(df, tssRegion = c(-3000, 3000),
+                          columns = c("ENTREZID", "ENSEMBL", "SYMBOL", "GENENAME"),
+                          annoDb="org.Hs.eg.db",
+                          TxDb = txdb))
+})
+```
+
+#check del pvalue
+```{r}
+for (i in names(Report.Differential.binding.SEs.H3K27ac.Annotated.df)) {
+pvals <- Report.Differential.binding.SEs.H3K27ac.Annotated.df[[i]]$p.value
+histo <- hist(pvals,
+    breaks = 100,
+    main = i
+    )
+print(histo)
+}
+```
+
+#salvo in excel
+```{r}
+openxlsx::write.xlsx(Report.Differential.binding.SEs.H3K27ac.Annotated.df, file = "/media/alessio/Data/hypoxia/ChIPseq/tables/H3K27ac_tables/Superenhancers_DiffBind_results_ROSE/SEs.H3K27ac.H4KOvsCAS9.ROSE_summits35000.xlsx")
+```
+
+
+#Analisi differenziale tempi di ipossia
+```{r}
+Contrasts.SEs.H3K27ac.hypoxia.times <- list(
+  CAS9_6h = (CAS9_6h <- dba.contrast(dba.normalized.SEs.H3K27ac.summits35000, design = ~ Factor, contrast = c("Factor", "CAS9_6h", "CAS9_0h"))),
+  CAS9_24h = (CAS9_24h <- dba.contrast(dba.normalized.SEs.H3K27ac.summits35000, design = ~ Factor, contrast = c("Factor", "CAS9_24h", "CAS9_0h"))),
+  H4KO_6h = (H4KO_6h <- dba.contrast(dba.normalized.SEs.H3K27ac.summits35000, design = ~ Factor, contrast = c("Factor", "H4KO_6h", "H4KO_0h"))),
+  H4KO_24h = (H4KO_24h <- dba.contrast(dba.normalized.SEs.H3K27ac.summits35000, design = ~ Factor, contrast = c("Factor", "H4KO_24h", "H4KO_0h")))
+ )
+
+Differential.binding.SEs.H3K27ac.hypoxia.times <- lapply(Contrasts.SEs.H3K27ac.hypoxia.times, function(analyze) {
+  analyzed <- dba.analyze(analyze)
+  return(analyzed)
+})
+
+for (i in Differential.binding.SEs.H3K27ac.hypoxia.times) {
+  show <- dba.show(i, bContrasts=TRUE)
+  print(show)
+  rm(i, show)
+}
+
+#devo settare pvalue altrimenti sulle 6 ore non salta fuori niente (RIP)
+for (i in names(Differential.binding.SEs.H3K27ac.hypoxia.times)) {
+  Volcano <- dba.plotVolcano(Differential.binding.SEs.H3K27ac.hypoxia.times[[i]], bUsePval = T)
+  Venn <- dba.plotVenn(Differential.binding.SEs.H3K27ac.hypoxia.times[[i]], contrast = 1, bDB = TRUE, bGain = TRUE, bLoss = TRUE, bAll = FALSE, bUsePval = T)
+  print(Volcano)
+  print(Venn)
+}
+
+```
+
+#report
+```{r}
+Report.Differential.binding.SEs.H3K27ac.hypoxia.times <- lapply(Differential.binding.SEs.H3K27ac.hypoxia.times, function(df) {
+  report <- dba.report(df, th = 1)
+  return(report)
+})
+```
+
+
+
+#Annoto tutti i picchi con ChIPseeker
+```{r}
+txdb <- makeTxDbFromGFF("/media/alessio/Data/genome110/gencode/gencode_V44.gff")
+
+Report.Differential.binding.SEs.H3K27ac.hypoxia.times.Annotated.df <- lapply(Report.Differential.binding.SEs.H3K27ac.hypoxia.times, function(df) {
+  Anno <- as.data.frame(annotatePeak(df, tssRegion = c(-3000, 3000),
+                          columns = c("ENTREZID", "ENSEMBL", "SYMBOL", "GENENAME"),
+                          annoDb="org.Hs.eg.db",
+                          TxDb = txdb))
+})
+```
+
+#check del pvalue
+```{r}
+for (i in names(Report.Differential.binding.SEs.H3K27ac.hypoxia.times.Annotated.df)) {
+pvals <- Report.Differential.binding.SEs.H3K27ac.hypoxia.times.Annotated.df[[i]]$p.value
+histo <- hist(pvals,
+    breaks = 100,
+    main = i
+    )
+print(histo)
+}
+```
+
+#salvo in excel
+```{r}
+openxlsx::write.xlsx(Report.Differential.binding.SEs.H3K27ac.hypoxia.times.Annotated.df, file = "/media/alessio/Data/hypoxia/ChIPseq/tables/H3K27ac_tables/Superenhancers_DiffBind_results_ROSE/SEs.H3K27ac.Vsnormoxia.ROSE_summits35000.xlsx")
+```
+
+
+
+
+
+
+
+
+#ripeto analisi per H2BK120ac
+
+#prima di tutto sistemo gli output di ROSE per renderli utilizzabili da DiffBind
+```{r}
+pathx = "/media/alessio/Data/hypoxia/ChIPseq/ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H2BK120ac/"
+dirs = c("C1B", "C1E", "C1H", "C2B", "C2E", "C2H", "K125B1", "K125E1", "K125H1", "K26B1", "K26E1", "K26H1")
+file = "_peaks_SuperEnhancers.table.txt"
+
+ROSE.SEs.tables.H2BK120ac <- list()
+
+
+
+#useremo come Score value "NUM LOCI", che sarà la quarta colonna
+for (i in dirs) {
+  tmp.path = file.path(pathx,i,paste0(i,file))
+  tmp.table = read.delim(tmp.path, skip = 5, header = T) |> 
+    dplyr::select("CHROM", "START", "STOP", "NUM_LOCI", "enhancerRank")
+    
+  ROSE.SEs.tables.H2BK120ac[[i]] <- tmp.table
+}
+
+#salviamo i file come bed
+for (i in names(ROSE.SEs.tables.H2BK120ac))  {
+  write.table(ROSE.SEs.tables.H2BK120ac[[i]], file = paste0(pathx,"/",i,"/",paste0(i,"_superEnhancer_ROSE.bed")), col.names = F, sep = "\t", row.names = F, quote = F)
+}
+```
+
+
+#carico samplesheet e lo modifico inserendo i bed files dei super enhancers
+```{r}
+coldata.SEs.H2BK120ac = read.csv("/media/alessio/Data/hypoxia/ChIPseq/experiment.csv") |> 
+  dplyr::filter(Condition == "H2BK120AC" & PeakCaller == "macs3") |> 
+  dplyr::mutate(Peaks = paste0("/media/alessio/Data/hypoxia/ChIPseq/ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H2BK120ac/",SampleID,"/",paste0(SampleID,"_superEnhancer_ROSE.bed"))) |> 
+  dplyr::mutate(PeakCaller = "bed")
+```
+
+#Counts
+```{r}
+dba.SEs.H2BK120ac <- dba(sampleSheet = coldata.SEs.H2BK120ac, scoreCol = 4)
+
+plot(dba.SEs.H2BK120ac)
+
+
+#dba.counts.SEs.H2BK120ac <- dba.count(dba.SEs.H2BK120ac, bParallel = FALSE)
+dba.counts.SEs.H2BK120ac.summits42500 <- dba.count(dba.SEs.H2BK120ac, summits = 42500, bParallel = FALSE)
+```
+
+#normalizzazione
+```{r}
+#dba.normalized.SEs.H2BK120ac <- dba.normalize(dba.counts.SEs.H2BK120ac, normalize = "RLE", library = DBA_LIBSIZE_PEAKREADS)
+dba.normalized.SEs.H2BK120ac.summits42500 <- dba.normalize(dba.counts.SEs.H2BK120ac.summits42500, normalize = "RLE", library = DBA_LIBSIZE_PEAKREADS)
+
+#dba.plotPCA(dba.normalized.SEs.H2BK120ac, color = DBA_TREATMENT, label=DBA_ID)
+dba.plotPCA(dba.normalized.SEs.H2BK120ac.summits42500, color = DBA_TREATMENT, label=DBA_ID)
+
+plot(dba.normalized.SEs.H2BK120ac.summits42500)
+```
+
+#estraggo matrice
+```{r}
+Enrichment.matrix.SEs.H2BK120ac <- dba.peakset(dba.normalized.SEs.H2BK120ac.summits42500, bRetrieve = T, DataType = DBA_DATA_FRAME)
+```
+
+#Analisi differenziale H4KO vs CAS9
+```{r}
+#setting del contrast
+Contrasts.SEs.H2BK120ac <- list(Normoxia_H4KO_vs_CAS9 =  dba.contrast(dba.normalized.SEs.H2BK120ac.summits42500,
+                                                                                  design = ~ Factor, contrast = c("Factor", "H4KO_0h", "CAS9_0h")),
+                  H6_H4KO_vs_CAS9 = dba.contrast(dba.normalized.SEs.H2BK120ac.summits42500,
+                                                                     design = ~ Factor, contrast = c("Factor", "H4KO_6h", "CAS9_6h")),
+                  H24_H4KO_vs_CAS9 =  dba.contrast(dba.normalized.SEs.H2BK120ac.summits42500,
+                                                                       design = ~ Factor, contrast = c("Factor", "H4KO_24h", "CAS9_24h"))
+                                                      )
+
+#calcolo dei picchi differenziali
+Differential.binding.SEs.H2BK120ac <- lapply(Contrasts.SEs.H2BK120ac, function(analyze) {
+  analyzed <- dba.analyze(analyze)
+  return(analyzed)
+})
+
+for (i in Differential.binding.SEs.H2BK120ac) {
+  show <- dba.show(i, bContrasts=TRUE)
+  print(show)
+  rm(i, show)
+}
+
+for (i in names(Differential.binding.SEs.H2BK120ac)) {
+  Volcano <- dba.plotVolcano(Differential.binding.SEs.H2BK120ac[[i]])
+  Venn <- dba.plotVenn(Differential.binding.SEs.H2BK120ac[[i]], contrast = 1, bDB = TRUE, bGain = TRUE, bLoss = TRUE, bAll = FALSE)
+  print(Volcano)
+  print(Venn)
+}
+```
+
+#report
+```{r}
+#report di tutti i picchi 
+Report.Differential.binding.SEs.H2BK120ac <- lapply(Differential.binding.SEs.H2BK120ac, function(analyze) {
+  report <- dba.report(analyze, th = 1)
+  return(report)
+})
+```
+
+#Annotazione
+```{r}
+txdb <- makeTxDbFromGFF("/media/alessio/Data/genome110/gencode/gencode_V44.gff")
+
+Report.Differential.binding.SEs.H2BK120ac.Annotated.df <- lapply(Report.Differential.binding.SEs.H2BK120ac, function(df) {
+  Anno <- as.data.frame(annotatePeak(df, tssRegion = c(-3000, 3000),
+                          columns = c("ENTREZID", "ENSEMBL", "SYMBOL", "GENENAME"),
+                          annoDb="org.Hs.eg.db",
+                          TxDb = txdb))
+})
+```
+
+#check del pvalue
+```{r}
+for (i in names(Report.Differential.binding.SEs.H2BK120ac.Annotated.df)) {
+pvals <- Report.Differential.binding.SEs.H2BK120ac.Annotated.df[[i]]$p.value
+histo <- hist(pvals,
+    breaks = 100,
+    main = i
+    )
+print(histo)
+}
+```
+
+#salvo in excel
+```{r}
+openxlsx::write.xlsx(Report.Differential.binding.SEs.H2BK120ac.Annotated.df, file = "/media/alessio/Data/hypoxia/ChIPseq/tables/H2BK120ac_tables/Superenhancers_DiffBind_results_ROSE/SEs.H2BK120ac.H4KOvsCAS9.ROSE_summits42500.xlsx")
+```
+
+
+#Analisi differenziale tempi di ipossia
+```{r}
+Contrasts.SEs.H2BK120ac.hypoxia.times <- list(
+  CAS9_6h = dba.contrast(dba.normalized.SEs.H2BK120ac.summits42500, design = ~ Factor, contrast = c("Factor", "CAS9_6h", "CAS9_0h")),
+  CAS9_24h =  dba.contrast(dba.normalized.SEs.H2BK120ac.summits42500, design = ~ Factor, contrast = c("Factor", "CAS9_24h", "CAS9_0h")),
+  H4KO_6h =  dba.contrast(dba.normalized.SEs.H2BK120ac.summits42500, design = ~ Factor, contrast = c("Factor", "H4KO_6h", "H4KO_0h")),
+  H4KO_24h = dba.contrast(dba.normalized.SEs.H2BK120ac.summits42500, design = ~ Factor, contrast = c("Factor", "H4KO_24h", "H4KO_0h"))
+ )
+
+Differential.binding.SEs.H2BK120ac.hypoxia.times <- lapply(Contrasts.SEs.H2BK120ac.hypoxia.times, function(analyze) {
+  analyzed <- dba.analyze(analyze)
+  return(analyzed)
+})
+
+for (i in Differential.binding.SEs.H2BK120ac.hypoxia.times) {
+  show <- dba.show(i, bContrasts=TRUE)
+  print(show)
+  rm(i, show)
+}
+
+#devo settare pvalue altrimenti sulle 6 ore non salta fuori niente (RIP)
+for (i in names(Differential.binding.SEs.H2BK120ac.hypoxia.times)) {
+  Volcano <- dba.plotVolcano(Differential.binding.SEs.H2BK120ac.hypoxia.times[[i]], bUsePval = T)
+  Venn <- dba.plotVenn(Differential.binding.SEs.H2BK120ac.hypoxia.times[[i]], contrast = 1, bDB = TRUE, bGain = TRUE, bLoss = TRUE, bAll = FALSE, bUsePval = T)
+  print(Volcano)
+  print(Venn)
+}
+
+```
+
+#report
+```{r}
+Report.Differential.binding.SEs.H2BK120ac.hypoxia.times <- lapply(Differential.binding.SEs.H2BK120ac.hypoxia.times, function(df) {
+  report <- dba.report(df, th = 1)
+  return(report)
+})
+```
+
+
+
+#Annoto tutti i picchi con ChIPseeker
+```{r}
+txdb <- makeTxDbFromGFF("/media/alessio/Data/genome110/gencode/gencode_V44.gff")
+
+Report.Differential.binding.SEs.H2BK120ac.hypoxia.times.Annotated.df <- lapply(Report.Differential.binding.SEs.H2BK120ac.hypoxia.times, function(df) {
+  Anno <- as.data.frame(annotatePeak(df, tssRegion = c(-3000, 3000),
+                          columns = c("ENTREZID", "ENSEMBL", "SYMBOL", "GENENAME"),
+                          annoDb="org.Hs.eg.db",
+                          TxDb = txdb))
+})
+```
+
+#check del pvalue
+```{r}
+for (i in names(Report.Differential.binding.SEs.H2BK120ac.hypoxia.times.Annotated.df)) {
+pvals <- Report.Differential.binding.SEs.H2BK120ac.hypoxia.times.Annotated.df[[i]]$p.value
+histo <- hist(pvals,
+    breaks = 100,
+    main = i
+    )
+print(histo)
+}
+```
+
+#salvo in excel
+```{r}
+openxlsx::write.xlsx(Report.Differential.binding.SEs.H2BK120ac.hypoxia.times.Annotated.df, file = "/media/alessio/Data/hypoxia/ChIPseq/tables/H2BK120ac_tables/Superenhancers_DiffBind_results_ROSE/SEs.H2BK120ac.Vsnormoxia.ROSE_summits42500.xlsx")
+```
+
+
+
+#Report risultati
+```{r}
+Count.Diff <- function(list) {
+  Table <- tibble()
+  for (i in names(list)) {
+  tmp.df <- list[[i]] |> 
+    dplyr::mutate(Diff = case_when(
+      (Fold > 0 & FDR < 0.05) ~ "Gain",
+      (Fold < 0 & FDR < 0.05) ~ "Loss",
+      TRUE ~ "ns"
+    ))
+  Count.tbl <- tmp.df |> 
+    dplyr::filter(Diff != "ns") |> 
+    dplyr::count(Diff) |> 
+    dplyr::mutate("Comparison" = i) |> 
+    dplyr::rename(Counts = n) |> 
+    dplyr::relocate(Comparison, .before = Diff)
+  Table = bind_rows(Table, Count.tbl)
+  }
+  print(Table)
+}
+
+
+#H3K27ac
+H3K27ac.H4KOvsCAS9 <- Count.Diff(Report.Differential.binding.SEs.H3K27ac.Annotated.df)
+H3K27ac.VsNormoxia <- Count.Diff(Report.Differential.binding.SEs.H3K27ac.hypoxia.times.Annotated.df)
+
+H3K27ac.Report.DiffBind <- bind_rows(H3K27ac.H4KOvsCAS9, H3K27ac.VsNormoxia)
+
+#H2BK120ac
+H2BK120ac.H4KOvsCAS9 <- Count.Diff(Report.Differential.binding.SEs.H2BK120ac.Annotated.df)
+H2BK120ac.VsNormoxia <- Count.Diff(Report.Differential.binding.SEs.H2BK120ac.hypoxia.times.Annotated.df)
+
+H2BK120ac.Report.DiffBind <- bind_rows(H2BK120ac.H4KOvsCAS9, H2BK120ac.VsNormoxia)
+```
+
+#Salvo come immagine
+```{r}
+#H3K27ac
+png(filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/H3K27ac.DiffBind.results.ROSE.png", units = "cm", res = 300, height = 18, width = 18)
+title <- textGrob("H3K27ac super Enhancers", gp = gpar(fontsize = 20))
+subtitle <- textGrob("FDR < 0.05", gp = gpar(fontsize = 15))
+P <- tableGrob(H3K27ac.Report.DiffBind, rows = NULL)
+grid.arrange(title, subtitle, P,   ncol = 1,
+  heights = unit.c(unit(1, "cm"), unit(1, "cm"), unit(10, "cm")))
+dev.off()
+
+#H2BK120ac
+png(filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/H2BK120ac.DiffBind.results.ROSE.png", units = "cm", res = 300, height = 18, width = 18)
+title <- textGrob("H2BK120ac super Enhancers", gp = gpar(fontsize = 20))
+subtitle <- textGrob("FDR < 0.05", gp = gpar(fontsize = 15))
+P <- tableGrob(H2BK120ac.Report.DiffBind, rows = NULL)
+grid.arrange(title, subtitle, P,   ncol = 1,
+  heights = unit.c(unit(1, "cm"), unit(1, "cm"), unit(10, "cm")))
+dev.off()
+```
+
+
+
+
+
+#.########################################################
+#da qui in poi carico le tabella per le successive analisi
+#.########################################################
+
+
+#heatmap con locus dei SEs up e downregolati
+#leggo tabelle excel
+```{r}
+read_excel_allsheets <- function(filename, tibble = FALSE) {
+    # I prefer straight data.frames
+    # but if you like tidyverse tibbles (the default with read_excel)
+    # then just pass tibble = TRUE
+    sheets <- readxl::excel_sheets(filename)
+    x <- lapply(sheets, function(X) readxl::read_excel(filename, sheet = X))
+    if(!tibble) x <- lapply(x, as.data.frame)
+    names(x) <- sheets
+    x
+}
+
+Report.Differential.binding.SEs.H3K27ac.H4KOvsCas9.Annotated.df <- read_excel_allsheets("/media/alessio/Data/hypoxia/ChIPseq/tables/H3K27ac_tables/Superenhancers_DiffBind_results_ROSE/SEs.H3K27ac.H4KOvsCAS9.ROSE_summits35000.xlsx")
+
+Report.Differential.binding.SEs.H3K27ac.Vsnormoxia.Annotated.df <- read_excel_allsheets("/media/alessio/Data/hypoxia/ChIPseq/tables/H3K27ac_tables/Superenhancers_DiffBind_results_ROSE/SEs.H3K27ac.Vsnormoxia.ROSE_summits35000.xlsx")
+
+Report.Differential.binding.SEs.H2BK120ac.H4KOvsCas9.Annotated.df <- read_excel_allsheets("/media/alessio/Data/hypoxia/ChIPseq/tables/H2BK120ac_tables/Superenhancers_DiffBind_results_ROSE/SEs.H2BK120ac.H4KOvsCAS9.ROSE_summits42500.xlsx")
+
+Report.Differential.binding.SEs.H2BK120ac.Vsnormoxia.Annotated.df <- read_excel_allsheets("/media/alessio/Data/hypoxia/ChIPseq/tables/H2BK120ac_tables/Superenhancers_DiffBind_results_ROSE/SEs.H2BK120ac.Vsnormoxia.ROSE_summits42500.xlsx")
+```
+
+
+#creo heatmap ( per ora solo in normossia)
+#la faccio con i 15 locus più upregolati e i 15 più downregolati in normossia
+```{r}
+Create.heatmap.SEs <- function(list, mainz) {
+  
+  #passiamo dalla lista a una tabella con bindrows
+  Dataframe <- tibble()
+  
+  for (i in names(list)) {
+    df <- list[[i]] %>%
+      dplyr::mutate(locus = str_c(seqnames,":",start,"-",end), Comparison = i) %>% 
+      dplyr::arrange(locus) %>%
+      dplyr::select(locus, Fold, Comparison)
+   
+    Dataframe <- bind_rows(Dataframe, df)  
+  }
+  
+  #con pivot_wider la sistemo per farla diventare una matrice
+  Dataframe_final <- Dataframe %>% 
+    pivot_wider(names_from = "Comparison", values_from = "Fold") %>% 
+    column_to_rownames(var = "locus") %>% 
+    na.omit()
+  
+  #Filtro i primi e gli ultimi valori 
+  Dataframe_extremes <- Dataframe_final %>% 
+    dplyr::arrange(desc(Dataframe_final[[1]])) %>% 
+    dplyr::slice(c(1:15, (n() - 14):n())) %>% 
+    dplyr::select(1) %>% 
+    as.matrix()
+  
+  
+  #Creo heatmap
+  my_palette <- colorRampPalette(c("blue", "white", "red"))(50)
+  breaks <- seq(-max(abs(Dataframe_extremes)), max(abs(Dataframe_extremes)), length.out = 51)
+  
+  Hmap <- pheatmap(t(Dataframe_extremes), 
+                   cluster_rows = F,
+                   cluster_cols = F,
+                   angle_col = 45,
+                   color = my_palette,
+                   breaks = breaks,
+                   cellheight = 30,
+                   cellwidth = 30,
+                   main = mainz,
+                   fontsize = 15
+                   )
+  
+  return(Hmap)
+}
+
+Heatmap.SEs.H3K27ac <- Create.heatmap.SEs(Report.Differential.binding.SEs.H3K27ac.H4KOvsCas9.Annotated.df, "H3K27ac Top Differential SEs")
+#Heatmap.SEs.H3K27ac.Vsnormoxia <- Create.heatmap.SEs(Report.Differential.binding.SEs.H3K27ac.Vsnormoxia.Annotated.df, "H3K27ac Top Differential SEs")
+
+Heatmap.SEs.H3K27ac
+#Heatmap.SEs.H3K27ac.Vsnormoxia
+
+Heatmap.SEs.H2BK120ac <- Create.heatmap.SEs(Report.Differential.binding.SEs.H2BK120ac.H4KOvsCas9.Annotated.df, "H2BK120ac Top Differential SEs")
+#Heatmap.SEs.H2BK120ac.Vsnormoxia <- Create.heatmap.SEs(Report.Differential.binding.SEs.H2BK120ac.Vsnormoxia.Annotated.df, "H2BK120ac Top Differential SEs")
+
+Heatmap.SEs.H2BK120ac
+#Heatmap.SEs.H2BK120ac.Vsnormoxia
+```
+
+#salvo heatmap
+```{r}
+# png(filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/Heatmap_SEs_H3K27ac_normoxia.png", res = 300, units = "cm", height = 10, width = 50)
+# Heatmap.SEs.H3K27ac
+# dev.off()
+
+pdf(file = "/media/alessio/Data/hypoxia/ChIPseq/plot/Heatmap_SEs_H3K27ac_normoxia.pdf",  height = 10, width = 20)
+Heatmap.SEs.H3K27ac
+dev.off()
+
+pdf(file = "/media/alessio/Data/hypoxia/ChIPseq/plot/Heatmap_SEs_H2BK120ac_normoxia.pdf",  height = 10, width = 20)
+Heatmap.SEs.H2BK120ac
+dev.off()
+```
+
+#Overlap SEsdifferenziali H3K27ac H2BK120ac
+```{r}
+library(ChIPpeakAnno)
+
+Max15_Report.Differential.binding.SEs.H3K27ac.H4KOvsCas9.Annotated.df.Granges <- lapply(Report.Differential.binding.SEs.H3K27ac.H4KOvsCas9.Annotated.df, function(df) {
+  df_max <- df %>%    
+    dplyr::arrange(desc(df$Fold)) %>% 
+    dplyr::slice(1:15)
+  Gr <- makeGRangesFromDataFrame(df_max, keep.extra.columns = T)
+  return(Gr)
+})
+
+Max15_Report.Differential.binding.SEs.H2BK120ac.H4KOvsCas9.Annotated.df.Granges <- lapply(Report.Differential.binding.SEs.H2BK120ac.H4KOvsCas9.Annotated.df, function(df) {
+    df_max <- df %>%    
+    dplyr::arrange(desc(df$Fold)) %>% 
+    dplyr::slice(1:15)
+  Gr <- makeGRangesFromDataFrame(df_max, keep.extra.columns = T)
+  return(Gr)
+})
+
+makeVennDiagram(Peaks = list(Max15_Report.Differential.binding.SEs.H3K27ac.H4KOvsCas9.Annotated.df.Granges$Normoxia_H4KO_vs_CAS9,
+                             Max15_Report.Differential.binding.SEs.H2BK120ac.H4KOvsCas9.Annotated.df.Granges$Normoxia_H4KO_vs_CAS9),
+                NameOfPeaks = c("H3K27ac_H4KO_vs_Cas9_normoxia", "H2BK120ac_H4KO_vs_Cas9_normoxia" )
+)
+
+
+
+subsetByOverlaps(Max15_Report.Differential.binding.SEs.H3K27ac.H4KOvsCas9.Annotated.df.Granges$Normoxia_H4KO_vs_CAS9,
+                             Max15_Report.Differential.binding.SEs.H2BK120ac.H4KOvsCas9.Annotated.df.Granges$Normoxia_H4KO_vs_CAS9,
+                 maxgap = 40000)
+```
+
+```{r}
+subsetByOverlaps(Max15_Report.Differential.binding.SEs.H3K27ac.H4KOvsCas9.Annotated.df.Granges$Normoxia_H4KO_vs_CAS9,
+             Olaps.Normoxia.H4KO.H3K27ac.H2BK120ac) #questo file qua creato dall Rmd Typical_and Superenhancers_slection..blabla
+```
+
+
+
+
+#Faccio una heatmap in cui prendo dei locus in comune upregolati fra H3K27ac e H2BK120ac
+```{r}
+library(ComplexHeatmap)
+
+MakeHeatmap.from.DiffBind.Common.locus.Upreg.SEs <- function(H3K27ac.SEs.DiffBind.normoxia, H2BK120ac.SEs.DiffBind.normoxia, sign) {
+  
+  if (sign == "Up") 
+  {filterfunc <- function(df) dplyr::filter(df, Fold > 0 & p.value < 0.05)
+   sortfunc <- function(df) dplyr::arrange(df, desc(Fold_H3K27ac))
+   colz= c("white", "darkred")
+   Titlez = "Differential Superenhancers Upregulated"}
+  if (sign == "Down")
+  {filterfunc <- function(df) dplyr::filter(df, Fold < 0 & p.value < 0.05)
+   sortfunc <- function(df) dplyr::arrange(df, Fold_H3K27ac)
+   colz= c("darkblue", "white")
+   Titlez = "Differential Superenhancers Downregulated"}
+  
+  #trasformo in Granges
+  Gr.H3K27ac.Upreg <- H3K27ac.SEs.DiffBind.normoxia %>%   
+    filterfunc() %>% 
+    makeGRangesFromDataFrame(., keep.extra.columns = T)
+  
+  Gr.H2BK120ac.Upreg <- H2BK120ac.SEs.DiffBind.normoxia %>%   
+    filterfunc() %>% 
+    makeGRangesFromDataFrame(., keep.extra.columns = T)
+  
+  #calcolo gli Overlaps
+  Overlaps <- findOverlaps(Gr.H3K27ac.Upreg,
+                           Gr.H2BK120ac.Upreg)
+  
+  
+  #Uso questo blocco se voglio avare una tabella come output della funzione
+  #estraggo gli overlap e converto in dataframe
+  H3K27ac.Upreg.Filetered <- Gr.H3K27ac.Upreg[queryHits(Overlaps)] %>%
+    as.data.frame() %>%
+    dplyr::rename(Fold_H3K27ac = Fold, p.value_H3K27ac = p.value) %>%
+    dplyr::mutate(Locus_H3K27ac = str_c(seqnames,":",start,"-",end)) %>%
+    dplyr::select(Locus_H3K27ac, Fold_H3K27ac, p.value_H3K27ac)
+
+  H2BK120ac.Upreg.Filtered <- Gr.H2BK120ac.Upreg[subjectHits(Overlaps)] %>%
+    as.data.frame() %>%
+    dplyr::rename(Fold_H2BK120ac = Fold, p.value_H2BK120ac = p.value) %>%
+    dplyr::mutate(Locus_H2BK120ac = str_c(seqnames,":",start,"-",end)) %>%
+    dplyr::select(Locus_H2BK120ac, Fold_H2BK120ac, p.value_H2BK120ac)
+
+  Table_bind = bind_cols(H3K27ac.Upreg.Filetered,
+                         H2BK120ac.Upreg.Filtered) %>%
+    sortfunc()
+
+  # #Uso questo blocco se voglio avere una heatmap
+  # #estraggo gli overlap e converto in dataframe
+  # H3K27ac.Upreg.Filetered <- Gr.H3K27ac.Upreg[queryHits(Overlaps)] %>%
+  #   as.data.frame() %>%
+  #   dplyr::rename(Fold_H3K27ac = Fold) %>%
+  #   dplyr::select(Fold_H3K27ac)
+  # 
+  # H2BK120ac.Upreg.Filtered <- Gr.H2BK120ac.Upreg[subjectHits(Overlaps)] %>%
+  #   as.data.frame() %>%
+  #   dplyr::rename(Fold_H2BK120ac = Fold) %>%
+  #   dplyr::select(Fold_H2BK120ac)
+  # 
+  # #Unisco i dataframe
+  # Table_bind = bind_cols(H3K27ac.Upreg.Filetered,
+  #                        H2BK120ac.Upreg.Filtered) %>%
+  #   sortfunc() %>%
+  #   as.matrix()
+  # 
+  # #plot
+  # Heatmap <- Heatmap(Table_bind,
+  #         name = "L2FC",
+  #         col = colz,
+  #         cluster_rows = T,
+  #         cluster_columns = F,
+  #         row_title = "Locus",
+  #         column_title = Titlez,
+  #         column_names_rot = 45,
+  #         width = unit(6, "cm"),
+  #         height  = unit(15, "cm"))
+  # 
+  # return(Heatmap)
+}
+
+
+#Modifico il blocco della funzione a seconda se voglio una tabella o un Heatmap
+# Heatmap
+# Heatmap.Upreg.SEs.H3K27ac.H2BK120ac <- MakeHeatmap.from.DiffBind.Common.locus.Upreg.SEs(Report.Differential.binding.SEs.H3K27ac.H4KOvsCas9.Annotated.df$Normoxia_H4KO_vs_CAS9,
+#                                                  Report.Differential.binding.SEs.H2BK120ac.H4KOvsCas9.Annotated.df$Normoxia_H4KO_vs_CAS9, "Up")
+# 
+# Heatmap.Downreg.SEs.H3K27ac.H2BK120ac <- MakeHeatmap.from.DiffBind.Common.locus.Upreg.SEs(Report.Differential.binding.SEs.H3K27ac.H4KOvsCas9.Annotated.df$Normoxia_H4KO_vs_CAS9,
+#                                                  Report.Differential.binding.SEs.H2BK120ac.H4KOvsCas9.Annotated.df$Normoxia_H4KO_vs_CAS9, "Down")
+
+#Tabelle
+Tabella.Upreg.SEs.H3K27ac.H2BK120ac <- MakeHeatmap.from.DiffBind.Common.locus.Upreg.SEs(Report.Differential.binding.SEs.H3K27ac.H4KOvsCas9.Annotated.df$Normoxia_H4KO_vs_CAS9,
+                                                 Report.Differential.binding.SEs.H2BK120ac.H4KOvsCas9.Annotated.df$Normoxia_H4KO_vs_CAS9, "Up")
+
+
+Tabella.Downreg.SEs.H3K27ac.H2BK120ac <- MakeHeatmap.from.DiffBind.Common.locus.Upreg.SEs(Report.Differential.binding.SEs.H3K27ac.H4KOvsCas9.Annotated.df$Normoxia_H4KO_vs_CAS9,
+                                                 Report.Differential.binding.SEs.H2BK120ac.H4KOvsCas9.Annotated.df$Normoxia_H4KO_vs_CAS9, "Down")
+```
+
+#salvo Heatmap
+```{r}
+pdf(file = "/media/alessio/Data/hypoxia/ChIPseq/Figure_paper/Heatmap_SEs_H3K27ac_H2BK120ac_Differential_common_Up.pdf", height = 15, width = 5)
+Heatmap.Upreg.SEs.H3K27ac.H2BK120ac
+dev.off()
+
+pdf(file = "/media/alessio/Data/hypoxia/ChIPseq/Figure_paper/Heatmap_SEs_H3K27ac_H2BK120ac_Differential_common_Down.pdf", height = 15, width = 5)
+Heatmap.Downreg.SEs.H3K27ac.H2BK120ac
+dev.off()
+```
+
+#salvo excel
+```{r}
+library(openxlsx)
+Tabella.common.UpeDown <- list(UP = Tabella.Upreg.SEs.H3K27ac.H2BK120ac,
+                               DOWN = Tabella.Downreg.SEs.H3K27ac.H2BK120ac)
+
+write.xlsx(Tabella.common.UpeDown, "/media/alessio/Data/hypoxia/ChIPseq/Figure_paper/Tabella.SEs.common.UpeDown.xlsx")
+```
+
+#salvo una tabella unica con i SEs differenziali in normossia
+```{r}
+library(openxlsx)
+
+Normoxia.SEs.H3K27ac.H2BK120ac <- list(H3K27ac_normoxia = Report.Differential.binding.SEs.H3K27ac.H4KOvsCas9.Annotated.df$Normoxia_H4KO_vs_CAS9  %>% 
+                                         dplyr::filter(p.value < 0.05) %>% 
+                                         dplyr::mutate(Diff = ifelse((Fold > 0), "Up", "Down")) %>% 
+                                         dplyr::select(seqnames, start, end, Fold, p.value, FDR, Diff) %>% 
+                                         dplyr::arrange(desc(Fold)),
+                                       H2BK120ac_normoxia = Report.Differential.binding.SEs.H2BK120ac.H4KOvsCas9.Annotated.df$Normoxia_H4KO_vs_CAS9 %>% 
+                                         dplyr::filter(p.value < 0.05) %>% 
+                                         dplyr::mutate(Diff = ifelse((Fold > 0), "Up", "Down")) %>% 
+                                         dplyr::select(seqnames, start, end, Fold, p.value, FDR, Diff) %>% 
+                                         dplyr::arrange(desc(Fold))
+)
+
+write.xlsx(Normoxia.SEs.H3K27ac.H2BK120ac,
+            file = "/media/alessio/Data/hypoxia/ChIPseq/Figure_paper/SEs_UP_Down_report.xlsx"
+)
+
+```
+
+
+
+#Overlap dei SEs Up differenziali con HDAC4 (filtro a FOLD > 0.5 per farli uscire bene dopo nel plot con HDAC4)
+```{r}
+HDAC4_peaks <- readPeakFile("/media/alessio/Data/NAR2020_Cb/GSM3882325_HDAC4_DMSO_SKUT_peaks.narrowPeak")
+
+DiffBind.SEs.Up.Down <- list(
+  H3K27ac.SEs.Upreg.Normoxia = Report.Differential.binding.SEs.H3K27ac.H4KOvsCas9.Annotated.df$Normoxia_H4KO_vs_CAS9 %>%   
+    dplyr::filter(Fold > 0.5 & p.value < 0.05) %>% 
+    makeGRangesFromDataFrame(., keep.extra.columns = T),
+
+  H3K27ac.SEs.Downreg.Normoxia = Report.Differential.binding.SEs.H3K27ac.H4KOvsCas9.Annotated.df$Normoxia_H4KO_vs_CAS9 %>%   
+    dplyr::filter(Fold < -0.5 & p.value < 0.05) %>% 
+    makeGRangesFromDataFrame(., keep.extra.columns = T),
+  
+  H3K27ac.SEs.NS.Normoxia = Report.Differential.binding.SEs.H3K27ac.H4KOvsCas9.Annotated.df$Normoxia_H4KO_vs_CAS9 %>%   
+    dplyr::filter(p.value > 0.05) %>% 
+    makeGRangesFromDataFrame(., keep.extra.columns = T),
+  
+  H2BK120ac.SEs.Upreg.Normoxia = Report.Differential.binding.SEs.H2BK120ac.H4KOvsCas9.Annotated.df$Normoxia_H4KO_vs_CAS9 %>%   
+    dplyr::filter(Fold > 0.5 & p.value < 0.05) %>% 
+    makeGRangesFromDataFrame(., keep.extra.columns = T),
+
+  H2BK120ac.SEs.Downreg.Normoxia = Report.Differential.binding.SEs.H2BK120ac.H4KOvsCas9.Annotated.df$Normoxia_H4KO_vs_CAS9 %>%   
+    dplyr::filter(Fold < -0.5 & p.value < 0.05) %>% 
+    makeGRangesFromDataFrame(., keep.extra.columns = T),
+  
+  H2BK120ac.SEs.NS.Normoxia = Report.Differential.binding.SEs.H2BK120ac.H4KOvsCas9.Annotated.df$Normoxia_H4KO_vs_CAS9 %>%   
+    dplyr::filter(p.value > 0.05) %>% 
+    makeGRangesFromDataFrame(., keep.extra.columns = T)
+  
+)
+```
+
+#Venn diagram con overlap
+```{r}
+Venn.Normoxia.SEs.H3.H2 <- list()
+
+for (i in names(DiffBind.SEs.Up.Down)) {
+  
+  if (str_detect(i, "H3K27ac")) 
+    {fill = c("purple", "lightblue")}
+  else 
+    {fill = c("darkgreen", "lightblue")}
+  
+  venn <- makeVennDiagram(Peaks = list(DiffBind.SEs.Up.Down[[i]],
+                             HDAC4_peaks),
+                NameOfPeaks = c(i, "HDAC4 peaks"),
+                connectedPeaks = "keepAll", 
+                margin = 0.15,
+                fill = fill,
+                col = "white"
+                )
+  
+  Venn.Normoxia.SEs.H3.H2[[i]] <- grid::grid.grab(expr = venn)
+}
+
+Venn.Normoxia.SEs.H3.H2 <- grid.arrange(grobs = Venn.Normoxia.SEs.H3.H2, ncol = 3)
+
+#ggsave(Venn.Normoxia.SEs.H3.H2, filename= "/media/alessio/Data/hypoxia/ChIPseq/plot/SEs_H3K27ac_H2Bk120ac_HDAC4_overlaps.png", dpi = 300, height = 10, width = 15)
+```
+
+
+#Frequenza dei picchi di HDAC4 nei SEs UP e DOWN
+```{r}
+Counts.Overlaps.with.HDAC4.DiffBind.SEs.Up.Down <- tibble()
+
+for (i in names(DiffBind.SEs.Up.Down)) {
+ Counts.Overlaps <- countOverlaps(DiffBind.SEs.Up.Down[[i]],
+                                  HDAC4_peaks)
+ 
+ df <- data_frame(Overlaps_HDAC4 = Counts.Overlaps) %>% 
+   dplyr::mutate(Sample = i) %>% 
+   dplyr::mutate(Up_or_Down = case_when(
+    str_detect(i, "Upreg") ~ "UP",
+    str_detect(i, "Downreg") ~ "DOWN",
+    TRUE ~ "NS"
+   ))
+ 
+ Counts.Overlaps.with.HDAC4.DiffBind.SEs.Up.Down <- bind_rows(Counts.Overlaps.with.HDAC4.DiffBind.SEs.Up.Down,
+                                                              df)
+}
+
+Counts.Overlaps.with.HDAC4.DiffBind.SEs.Up.Down$Sample %>% 
+  unique()
+```
+
+```{r}
+hist(sort(Counts.Overlaps.with.HDAC4.DiffBind.SEs.Up.Down$Overlaps_HDAC4), breaks = 200) # Poisson distributed
+```
+
+#Test di Wilcox per veders significatività
+```{r}
+wilcox.test(Overlaps_HDAC4 ~ Up_or_Down, data = Counts.Overlaps.with.HDAC4.DiffBind.SEs.Up.Down  %>% dplyr::filter(str_detect(Sample, "H3K27ac") & Up_or_Down %in% c("UP", "NS")))$p.value
+wilcox.test(Overlaps_HDAC4 ~ Up_or_Down, data = Counts.Overlaps.with.HDAC4.DiffBind.SEs.Up.Down  %>% dplyr::filter(str_detect(Sample, "H3K27ac") & Up_or_Down %in% c("DOWN", "NS")))$p.value
+wilcox.test(Overlaps_HDAC4 ~ Up_or_Down, data = Counts.Overlaps.with.HDAC4.DiffBind.SEs.Up.Down  %>% dplyr::filter(str_detect(Sample, "H3K27ac") & Up_or_Down %in% c("UP", "DOWN")))$p.value
+
+
+wilcox.test(Overlaps_HDAC4 ~ Up_or_Down, data = Counts.Overlaps.with.HDAC4.DiffBind.SEs.Up.Down  %>% dplyr::filter(str_detect(Sample, "H2BK120ac") & Up_or_Down %in% c("UP", "NS")))$p.value
+wilcox.test(Overlaps_HDAC4 ~ Up_or_Down, data = Counts.Overlaps.with.HDAC4.DiffBind.SEs.Up.Down  %>% dplyr::filter(str_detect(Sample, "H2BK120ac") & Up_or_Down %in% c("DOWN", "NS")))$p.value
+wilcox.test(Overlaps_HDAC4 ~ Up_or_Down, data = Counts.Overlaps.with.HDAC4.DiffBind.SEs.Up.Down  %>% dplyr::filter(str_detect(Sample, "H2BK120ac") & Up_or_Down %in% c("UP", "DOWN")))$p.value
+```
+
+#plot per rappresentare overlap dei SEs con HDAC4
+#1
+```{r}
+library(ggpubr)
+
+Plot.SEs.HDAC4.olaps.stat.differences <- Counts.Overlaps.with.HDAC4.DiffBind.SEs.Up.Down %>% 
+  dplyr::mutate(Marker = as.factor(ifelse(str_detect(Sample, "H3K27ac"), "H3K27ac", "H2BK120ac"))) %>% 
+  dplyr::mutate(Marker = fct_relevel(Marker, c("H3K27ac", "H2BK120ac"))) %>% 
+  dplyr::mutate(Sample = str_remove(Sample, "H3K27ac.|H2BK120ac.")) %>% 
+  ggplot(aes(x = Sample, y = Overlaps_HDAC4, color = Up_or_Down)) +
+  geom_boxplot() +
+  #geom_violin(trim = F, draw_quantiles = c(.25, .5, .75, .95)) +
+  scale_color_manual(values = c("UP" = "darkred", "DOWN" = "darkblue", "NS" = "grey")) +
+  stat_compare_means(method = "wilcox.test",
+                     comparisons = list(c("SEs.Upreg.Normoxia", "SEs.Downreg.Normoxia"),
+                                                                c("SEs.Upreg.Normoxia", "SEs.NS.Normoxia"),
+                                                                c("SEs.Downreg.Normoxia", "SEs.NS.Normoxia"))) +
+  stat_summary(fun.y="mean", geom = "point", col = "black", size = 3) +
+  facet_grid(~ Marker) +
+  labs(title = "HDAC4 peaks in Differential SEs",
+       x = NULL,
+       y = "HDAC4 peaks in overlap",
+       color = NULL) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        strip.text = element_text(color = "black"),   # Set facet title text color to white
+    strip.background = element_rect(fill = "white"))
+
+Plot.SEs.HDAC4.olaps.stat.differences
+```
+
+```{r}
+pdf(file =  "/media/alessio/Data/hypoxia/ChIPseq/Figure_paper/HDAC4_overlap_SEs_boxplot_wilcox_test.pdf", height = 7, width = 7)
+Plot.SEs.HDAC4.olaps.stat.differences
+dev.off()
+```
+
+
+<!-- #2 -->
+<!-- ```{r} -->
+<!-- Counts.Overlaps.with.HDAC4.DiffBind.SEs.Up.Down %>% -->
+<!--   group_by(Sample) %>% -->
+<!--   dplyr::summarize(Mean = mean(Overlaps_HDAC4), -->
+<!--                    sd = sd(Overlaps_HDAC4)) %>% -->
+<!--   dplyr::mutate(Up_or_Down = case_when( -->
+<!--     str_detect(Sample, "Upreg") ~ "UP", -->
+<!--     str_detect(Sample, "Downreg") ~ "DOWN", -->
+<!--     TRUE ~ "NS" -->
+<!--   )) %>%  -->
+<!--   ggplot(aes(x = Sample, y = Mean, colour = Up_or_Down)) + -->
+<!--   geom_point(size = 6, shape = "square") + -->
+<!--   geom_errorbar(aes(ymin = Mean - sd, ymax = Mean + sd), width = 0.2) + -->
+<!--   scale_color_manual(values = c("UP" = "darkred", "DOWN" = "darkblue", "NS" = "grey")) + -->
+<!--   theme_bw() + -->
+<!--   theme(axis.text.x = element_text(angle = 45, hjust = 1)) + -->
+<!--   labs(x = NULL, -->
+<!--        y = "HDAC4 peaks in overlap", -->
+<!--        color = NULL) -->
+<!-- ``` -->
+
+

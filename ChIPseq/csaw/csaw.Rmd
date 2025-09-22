@@ -1,0 +1,38 @@
+```{r setup, echo = F}
+library(tidyverse)
+library(csaw)
+```
+
+```{r}
+coldata <- read.csv("/media/alessio/Data/hypoxia/ChIPseq/experiment.csv") |> 
+  dplyr::filter(Condition == "H3K27AC")
+
+bam.files <- coldata$bamReads
+
+frag.len <- 400
+win.width <- 10
+param <- readParam(pe = "both")
+data <- windowCounts(bam.files, ext=frag.len, width=win.width, param=param)
+
+assay(data)
+head(rowRanges(data))
+data$rlen
+
+max.delay <- 500
+dedup.on <- initialize(param, dedup=TRUE) # just flips 'dedup=TRUE' in the existing 'param'.
+x <- correlateReads(bam.files, max.delay, param=dedup.on)
+plot(0:max.delay, x, type="l", ylab="CCF", xlab="Delay (bp)")
+
+out <- getPESizes("/media/alessio/Data/hypoxia/ChIPseq/samples/H3K27AC/C1A/human_only_sorted.bam")
+frag.sizes <- out$sizes[out$sizes<=800]
+hist(frag.sizes, breaks=50, xlab="Fragment sizes (bp)", 
+     ylab="Frequency", main="", col="grey80")
+abline(v=400, col="red")
+```
+
+#Rifaccio includendo gli input, provo solo su pochi campioni
+```{r}
+sub_coldata <- coldata |> 
+  dplyr::filter()
+```
+

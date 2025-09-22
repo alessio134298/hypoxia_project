@@ -1,0 +1,284 @@
+---
+title: SEs and TEs extraction from ROSE output  
+---
+
+```{r setup}
+library(tidyverse)
+library(GenomicRanges)
+library(ChIPpeakAnno)
+```
+
+## Estraggo i Tyical enhancers e Super enhancers dal file che contiene sia TEs che SEs
+```{r}
+path.H3K27ac = "/media/alessio/Data/hypoxia/ChIPseq/ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H3K27ac"
+dirs.H3K27ac = list.files(path = path.H3K27ac, full.names = F, pattern = "^.{3,6}$")
+file.ext = "_peaks_AllEnhancers.table.txt"
+
+path.H2BK120ac = "/media/alessio/Data/hypoxia/ChIPseq/ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H2BK120ac"
+dirs.H2BK120ac = list.files(path = path.H2BK120ac, full.names = F, pattern = "^.{3,6}$")
+file.ext = "_peaks_AllEnhancers.table.txt"
+
+
+
+Read.ROSE.output.and.split.SEs.and.TEs <- function(path, dirs, TEs.or.SEs) {
+  
+  TEs.list <- list()
+
+  for (i in dirs) {
+    tmp.path = file.path(path,i,str_c(i,file.ext))
+    df <- read.delim(tmp.path, skip = 5, header = T) %>% 
+      dplyr::filter(isSuper == 0) %>% 
+      dplyr::select(!REGION_ID) %>% 
+      dplyr::arrange("CHROMOSOME", "START")
+    TEs.list[[i]] <- df
+  }
+
+  SEs.list <- list()
+
+  for (i in dirs) {
+    tmp.path = file.path(path,i,str_c(i,file.ext))
+    df <- read.delim(tmp.path, skip = 5, header = T) %>% 
+      dplyr::filter(isSuper == 1) %>% 
+      dplyr::select(!REGION_ID) %>% 
+      dplyr::arrange("CHROMOSOME", "START")
+    SEs.list[[i]] <- df
+  }
+  
+  if (TEs.or.SEs == "TEs") {
+    return(TEs.list)
+  } else if (TEs.or.SEs == "SEs") {
+    return(SEs.list)
+  } else (stop("Dumb"))
+}
+
+TEs.list.H3K27ac <- Read.ROSE.output.and.split.SEs.and.TEs(path.H3K27ac, dirs.H3K27ac, "TEs")
+SEs.list.H3K27ac <- Read.ROSE.output.and.split.SEs.and.TEs(path.H3K27ac, dirs.H3K27ac, "SEs")
+
+TEs.list.H2BK120ac <- Read.ROSE.output.and.split.SEs.and.TEs(path.H2BK120ac, dirs.H2BK120ac, "TEs")
+SEs.list.H2BK120ac <- Read.ROSE.output.and.split.SEs.and.TEs(path.H2BK120ac, dirs.H2BK120ac, "SEs")
+```
+
+## Salvo tutti come bed (tenendo le colonne aggiuntive)
+```{r}
+#H3K27ac
+for (i in names(TEs.list.H3K27ac)) {
+  write_delim(x = TEs.list.H3K27ac[[i]], file = paste0(path.H3K27ac,"/",i,"/",i,"_TEs.bed"), delim = "\t", quote = "none", col_names = F)
+  write_delim(x = SEs.list.H3K27ac[[i]], file = paste0(path.H3K27ac,"/",i,"/",i,"_SEs.bed"), delim = "\t", quote = "none", col_names = F)
+}
+
+
+#H2BK120ac
+for (i in names(TEs.list.H2BK120ac)) {
+  write_delim(x = TEs.list.H2BK120ac[[i]], file = paste0(path.H2BK120ac,"/",i,"/",i,"_TEs.bed"), delim = "\t", quote = "none", col_names = F)
+  write_delim(x = SEs.list.H2BK120ac[[i]], file = paste0(path.H2BK120ac,"/",i,"/",i,"_SEs.bed"), delim = "\t", quote = "none", col_names = F)
+}
+```
+
+## Creo dei consensus fra i replicati (TEs e SEs)
+```{r warning=FALSE}
+#Converto in Granges
+ToGranges <- function(list) {
+  lapply(list, function(df) {
+    GR <- makeGRangesFromDataFrame(df)
+  return(GR)
+})
+} 
+
+TEs.list.H3K27ac.Granges <- ToGranges(TEs.list.H3K27ac)
+SEs.list.H3K27ac.Granges <- ToGranges(SEs.list.H3K27ac)
+
+TEs.list.H2BK120ac.Granges <- ToGranges(TEs.list.H2BK120ac)
+SEs.list.H2BK120ac.Granges <- ToGranges(SEs.list.H2BK120ac)
+
+
+
+#Funzione per creare i consensus
+MakeConsensuslists <- function(list) {
+  
+  Consensus.Gr.list <- list()
+
+  names <- c("Cas9_H0", "Cas9_H6", "Cas9_H24", "", "", "", "H4KO_H0", "H4KO_H6", "H4KO_H24")
+
+  for (i in c(1:3, 7:9)) {
+    Consensus <- subsetByOverlaps(list[[i]], list[[i + 3]])
+ 
+    namex <- names[[i]]
+ 
+    Consensus.Gr.list[[namex]] <- Consensus
+  }
+  
+  return(Consensus.Gr.list)
+}
+
+
+TEs.list.H3K27ac.Granges.Consensus.Rep <- MakeConsensuslists(TEs.list.H3K27ac.Granges)
+SEs.list.H3K27ac.Granges.Consensus.Rep <- MakeConsensuslists(SEs.list.H3K27ac.Granges)
+
+TEs.list.H2BK120ac.Granges.Consensus.Rep <- MakeConsensuslists(TEs.list.H2BK120ac.Granges)
+SEs.list.H2BK120ac.Granges.Consensus.Rep <- MakeConsensuslists(SEs.list.H2BK120ac.Granges)
+
+```
+
+## Salvo in formato bed
+```{r}
+Save.consensus <- function(list)  {
+  
+  path = ifelse(str_detect(deparse(substitute(list)), "H3K27ac"), path.H3K27ac, path.H2BK120ac)
+  
+  SEs_or_TEs = ifelse(str_detect(deparse(substitute(list)), "SEs"), "_SEs" , "_TEs") 
+  for (i in names(list)) {
+    write_delim(as.data.frame(list[[i]]), file = paste0(path,"/",i,SEs_or_TEs,".bed"), delim = "\t", quote = "none", col_names = F)
+  }
+}
+
+Save.consensus(TEs.list.H3K27ac.Granges.Consensus.Rep)
+Save.consensus(SEs.list.H3K27ac.Granges.Consensus.Rep)
+Save.consensus(TEs.list.H2BK120ac.Granges.Consensus.Rep)
+Save.consensus(SEs.list.H2BK120ac.Granges.Consensus.Rep)
+
+```
+
+#Annoto tutto con ChIPseeker
+```{r}
+library(ChIPseeker)
+
+txdb = TxDb.Hsapiens.UCSC.hg38.knownGene::TxDb.Hsapiens.UCSC.hg38.knownGene
+
+Annotate.list <- function(list) {
+  Annolist <- lapply(list, function(df) {
+    Annodf <- annotatePeak(df,
+                         tssRegion = c(-1000, 1000),
+                         TxDb = txdb,
+                         level = "gene",
+                         flankDistance = 5000,
+                         columns = c("ENTREZID", "ENSEMBL", "SYMBOL", "GENENAME"),
+                         annoDb = "org.Hs.eg.db"
+                        )
+    return(Annodf)
+  })
+  return(Annolist)
+}
+
+Annotated.TEs.list.H3K27ac.Granges.Consensus.Rep <- Annotate.list(TEs.list.H3K27ac.Granges.Consensus.Rep)
+Annotated.SEs.list.H3K27ac.Granges.Consensus.Rep <- Annotate.list(SEs.list.H3K27ac.Granges.Consensus.Rep)
+Annotated.TEs.list.H2BK120ac.Granges.Consensus.Rep <- Annotate.list(TEs.list.H2BK120ac.Granges.Consensus.Rep)
+Annotated.SEs.list.H2BK120ac.Granges.Consensus.Rep <- Annotate.list(SEs.list.H2BK120ac.Granges.Consensus.Rep)
+```
+
+#Annobar
+```{r}
+plotAnnoBar(Annotated.TEs.list.H3K27ac.Granges.Consensus.Rep)
+plotAnnoBar(Annotated.SEs.list.H3K27ac.Granges.Consensus.Rep)
+plotAnnoBar(Annotated.TEs.list.H2BK120ac.Granges.Consensus.Rep)
+plotAnnoBar(Annotated.SEs.list.H2BK120ac.Granges.Consensus.Rep)
+```
+
+#Overlap H3K27ac H2BK120ac, faccio una tabella al posto dei soliti venn
+```{r}
+return.table.Overlaps.SEs.H3K27ac.H2Bk120ac <- function(list.H3K27ac, list.H2BK120ac) {
+  len = length(list.H3K27ac)
+  
+  table.output = tibble()
+  
+  for (i in 1:len) {
+    
+    Sample.H3K27ac = names(list.H3K27ac[i])
+    Sample.H2BK120ac = names(list.H2BK120ac[i])
+    
+    n.SEs.H3K27ac = length(list.H3K27ac[[i]])
+    
+    n.SEs.H2BK120ac = length(list.H2BK120ac[[i]])
+    
+    Overlaps = length(findOverlaps(list.H3K27ac[[i]],
+                                   list.H2BK120ac[[i]],
+                                   minoverlap = 1
+    ))
+    
+    df <- tibble(
+      "Sample H3K27ac" = Sample.H3K27ac,
+      "Sample H2BK120ac" = Sample.H2BK120ac,
+      "SEs H3K27ac" = n.SEs.H3K27ac,
+      "SEs H2BK120ac" = n.SEs.H2BK120ac,
+      "SEs in Overlap" = Overlaps
+    )
+    
+    table.output <- bind_rows(table.output, df)
+  }
+  
+  return(table.output)
+}
+
+Table.Overlaps.SEs.H3K27ac.H2Bk120ac = return.table.Overlaps.SEs.H3K27ac.H2Bk120ac(SEs.list.H3K27ac.Granges, SEs.list.H2BK120ac.Granges)
+Table.Overlaps.SEs.H3K27ac.H2Bk120ac
+
+Table.Overlaps.SEs.H3K27ac.H2Bk120ac.Consensus = return.table.Overlaps.SEs.H3K27ac.H2Bk120ac(SEs.list.H3K27ac.Granges.Consensus.Rep, SEs.list.H2BK120ac.Granges.Consensus.Rep)
+Table.Overlaps.SEs.H3K27ac.H2Bk120ac.Consensus
+
+makeVennDiagram(Peaks = list(SEs.list.H3K27ac.Granges.Consensus.Rep$H4KO_H0, SEs.list.H2BK120ac.Granges.Consensus.Rep$H4KO_H0),
+                connectedPeaks = "keepAll", minoverlap = 1)
+
+findOverlaps(SEs.list.H3K27ac.Granges.Consensus.Rep$Cas9_H0, SEs.list.H2BK120ac.Granges.Consensus.Rep$Cas9_H0) %>%  reduce()
+```
+
+#salvo tabella
+```{r}
+openxlsx::write.xlsx(list(Table.Overlaps.SEs.H3K27ac.H2Bk120ac.Consensus, Table.Overlaps.SEs.H3K27ac.H2Bk120ac), file = "/media/alessio/Data/hypoxia/ChIPseq/tables/Report_SEs_H3K27ac_x_H2BK120ac.xlsx")
+```
+
+```{r}
+Olaps.Normoxia.H4KO.H3K27ac.H2BK120ac <- subsetByOverlaps(SEs.list.H3K27ac.Granges.Consensus.Rep$H4KO_H0, #mi serviva fare questo per l'altro Markdown sui risultati di DiffBind
+                 SEs.list.H2BK120ac.Granges.Consensus.Rep$H4KO_H0)
+```
+
+
+#.#################
+#Overlap con HDAC4#
+#.#################
+
+```{r}
+library(ChIPseeker)
+library(ChIPpeakAnno)
+
+HDAC4_peaks <- readPeakFile("/media/alessio/Data/NAR2020_Cb/GSM3882325_HDAC4_DMSO_SKUT_peaks.narrowPeak")
+
+for (i in names(SEs.list.H3K27ac.Granges.Consensus.Rep)) {
+  makeVennDiagram(Peaks = list(SEs.list.H3K27ac.Granges.Consensus.Rep[[i]],
+                               HDAC4_peaks),
+                  NameOfPeaks = c(i, "HDAC4"),
+                  main = "H3K27ac",
+                  connectedPeaks = "keepAll",
+                  fill = c("purple", "lightblue"),
+                  margin = 0.1)
+}
+
+for (i in names(SEs.list.H2BK120ac.Granges.Consensus.Rep)) {
+  makeVennDiagram(Peaks = list(SEs.list.H2BK120ac.Granges.Consensus.Rep[[i]],
+                               HDAC4_peaks),
+                  NameOfPeaks = c(i, "HDAC4"),
+                  main = "H2BK120ac",
+                  connectedPeaks = "keepAll",
+                  fill = c("darkgreen", "lightblue"),
+                  margin = 0.1)
+}
+
+for (i in names(SEs.list.H3K27ac.Granges)) {
+  makeVennDiagram(Peaks = list(SEs.list.H3K27ac.Granges[[i]],
+                               HDAC4_peaks),
+                  NameOfPeaks = c(i, "HDAC4"),
+                  main = "H3K27ac",
+                  connectedPeaks = "keepAll",
+                  fill = c("purple", "lightblue"),
+                  margin = 0.1)
+}
+
+for (i in names(SEs.list.H2BK120ac.Granges)) {
+  makeVennDiagram(Peaks = list(SEs.list.H2BK120ac.Granges[[i]],
+                               HDAC4_peaks),
+                  NameOfPeaks = c(i, "HDAC4"),
+                  main = "H2BK120ac",
+                  connectedPeaks = "keepAll",
+                  fill = c("darkgreen", "lightblue"),
+                  margin = 0.1)
+}
+```
+

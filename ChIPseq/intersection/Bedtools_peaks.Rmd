@@ -1,0 +1,297 @@
+```{r setup echo=FALSE}
+library(ggplot2)
+library(tidyverse)
+library(VennDiagram)
+library(gridExtra) 
+library(GenomicAlignments)
+library(rtracklayer)
+library(ChIPseeker)
+library(ChIPpeakAnno)
+library(clusterProfiler)
+```
+
+#H3K27ac
+```{r echo=FALSE}
+Peak_count <- read.delim("/media/alessio/Data/hypoxia/ChIPseq/intersection/H3K27AC/peakcounts.txt", header = FALSE) |> 
+  rename(File = V1, Peak_count = V2) |> 
+  mutate(name = str_replace(File, "_diffpeaks.bed", "") |>  
+           str_replace("_peaks.narrowPeak", "") |> 
+           str_replace("_peak_intersect_replicates.bed", "")) |> 
+  dplyr::mutate(wrap = case_when(
+    str_detect(File, "diffpeaks") ~ "H4KO Differential peaks",
+    str_detect(File, "replicates") ~ "Consensus Peaks",
+    str_detect(File, "narrowPeak") ~ "Replicates"
+    ))
+
+Peak_count$wrap <- factor(Peak_count$wrap, levels = c("Replicates", "Consensus Peaks", "H4KO Differential peaks"))
+
+
+Peaks_amount <- Peak_count |> 
+ggplot(aes(x = name, y = Peak_count, fill = wrap)) +
+  geom_col(position= "dodge", color = "black") +
+  scale_fill_manual(values = c("blue", "lightblue", "orange")) +
+  facet_wrap(~ wrap,
+             scales = "free_x",
+             dir = "h"
+             ) +
+  theme_bw() +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle =45, hjust=1)
+  ) +
+  labs(
+    title = "H3K27ac Peaks (Bedtools)",
+    fill = NULL,
+    x = NULL, 
+    y = "Number of Peaks") +
+  scale_y_continuous(breaks = seq(0, 100000, by = 7500)) 
+
+#ggsave(Peaks_amount, file = "/media/alessio/Data/hypoxia/ChIPseq/plot/H3K27AC_Peak_amount.png", dpi = 300, height = 9, width = 12)
+```
+
+#H2BK120ac
+```{r}
+Peak_count_H2BK120ac <- read.delim("/media/alessio/Data/hypoxia/ChIPseq/intersection/H2BK120AC/peakcounts.txt", header = FALSE) |> 
+  rename(File = V1, Peak_count = V2) |> 
+  mutate(name = str_replace(File, "_diffpeaks.bed", "") |>  
+           str_replace("_peaks.narrowPeak", "") |> 
+           str_replace("_peak_intersect_replicates.bed", "")) |> 
+  dplyr::mutate(wrap = case_when(
+    str_detect(File, "diffpeaks") ~ "H4KO Differential peaks",
+    str_detect(File, "replicates") ~ "Consensus Peaks",
+    str_detect(File, "narrowPeak") ~ "Replicates"
+    ))
+
+Peak_count_H2BK120ac$wrap <- factor(Peak_count$wrap, levels = c("Replicates", "Consensus Peaks", "H4KO Differential peaks"))
+
+
+Peaks_amount_H2BK120ac <- Peak_count_H2BK120ac |> 
+ggplot(aes(x = name, y = Peak_count, fill = wrap)) +
+  geom_col(position= "dodge", color = "black") +
+  scale_fill_manual(values = c("blue", "lightblue", "orange")) +
+  facet_wrap(~ wrap,
+             scales = "free_x",
+             dir = "h"
+             ) +
+  theme_bw() +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle =45, hjust=1)
+  ) +
+  labs(
+    title = "H2BK120ac Peaks (Bedtools)",
+    fill = NULL,
+    x = NULL, 
+    y = "Number of Peaks") +
+  scale_y_continuous(breaks = seq(0, 140000, by = 10000)) 
+
+ggsave(Peaks_amount_H2BK120ac, file = "/media/alessio/Data/hypoxia/ChIPseq/plot/H2BK120AC_Peak_amount.png", dpi = 300, height = 9, width = 12)
+```
+
+#Venn intersection Bedtools H3K27ac x H2BK120ac
+```{r}
+info_peaks_H3K27ac_H2BK120ac <- read.delim("/media/alessio/Data/hypoxia/ChIPseq/intersection/anno.txt", sep = " ", header = F) |> 
+  dplyr::select(!c(1,2,3)) |> 
+  dplyr::filter(V4 != "total") |> 
+  separate_wider_delim(V5, delim = "/", names = c("IP", "sample"), too_few = "align_end") |> 
+  dplyr::mutate(group = case_when(
+    str_detect(sample, "Cas9_normoxia") ~ "Cas9_normoxia",
+    str_detect(sample, "Cas9_H6") ~ "Cas9_H6",
+    str_detect(sample, "Cas9_H24") ~ "Cas9_H24",
+    str_detect(sample, "H4KO_normoxia") ~ "H4KO_normoxia",
+    str_detect(sample, "H4KO_H6") ~ "H4KO_H6",
+    str_detect(sample, "H4KO_H24") ~ "H4KO_H24"
+  )) |> 
+  dplyr::arrange(group)
+
+```
+
+#function
+```{r}
+print_venn <- function(area1, area2, crossarea, title) {
+  png(filename = paste0("/media/alessio/Data/hypoxia/ChIPseq/intersection/Venns/",title,".png"), res = 300, units = "cm", height = 15, width = 15)
+  venn <- draw.pairwise.venn(area1 = area1, area2 = area2, cross.area = crossarea,
+                   category = c("H3K27ac", "H2BK120ac"),
+                   fill = c("blue", "red"),
+                   lty = "blank",
+                   euler.d=TRUE)
+grid.arrange(gTree(children = venn),
+             top = title,
+             bottom = "Intersection H3K27ac H2BK120ac (30%)")
+dev.off()
+}
+```
+
+#creo venn
+```{r}
+#leggo i numeri da info_peaks_H3K27ac_H2BK120ac
+print_venn(29083, 36268, 20498, "Cas9_normoxia")
+print_venn(37366, 57185, 19963, "Cas9_6H")
+print_venn(34562, 51912, 16888, "Cas9_24H")
+print_venn(24572, 25314, 15784, "H4KO_normoxia")
+print_venn(27068, 31834, 14312, "H4KO_6H")
+print_venn(27822, 32764, 17386, "H4KO_24H")
+```
+
+
+
+#findOverlaps
+#carico peak files come granges
+```{r}
+#lista H3K27ac, intersect replicates di bedtools
+
+Path_H3K27ac <- "/media/alessio/Data/hypoxia/ChIPseq/intersection/H3K27AC"
+Files_H3K27ac <- c("Cas9_H24_peak_intersect_replicates.bed", 
+"Cas9_H6_peak_intersect_replicates.bed",
+"Cas9_normoxia_peak_intersect_replicates.bed",
+"H4KO_H24_peak_intersect_replicates.bed",
+"H4KO_H6_peak_intersect_replicates.bed",
+"H4KO_normoxia_peak_intersect_replicates.bed")
+
+Peak_list_H3K27ac <- list()
+
+for (i in Files_H3K27ac) {
+  name <- str_remove(i, ".bed")
+  path_tmp <- file.path(Path_H3K27ac,i)
+  tmp_df <- readPeakFile(path_tmp, as = "GRanges")
+  Peak_list_H3K27ac[[name]] <- tmp_df
+}
+
+#lista H2BK120ac
+Path_H2BK120ac <- "/media/alessio/Data/hypoxia/ChIPseq/intersection/H2BK120AC"
+Files_H2BK120ac <- c("Cas9_H24_peak_intersect_replicates.bed", 
+"Cas9_H6_peak_intersect_replicates.bed",
+"Cas9_normoxia_peak_intersect_replicates.bed",
+"H4KO_H24_peak_intersect_replicates.bed",
+"H4KO_H6_peak_intersect_replicates.bed",
+"H4KO_normoxia_peak_intersect_replicates.bed")
+
+Peak_list_H2BK120ac <- list()
+
+for (i in Files_H2BK120ac) {
+  name <- str_remove(i, ".bed")
+  path_tmp <- file.path(Path_H2BK120ac,i)
+  tmp_df <- readPeakFile(path_tmp, as = "GRanges")
+  Peak_list_H2BK120ac[[name]] <- tmp_df
+}
+```
+
+#calcolo overlaps (bu devo vedere se ha senso sta roba)
+```{r}
+olap <- findOverlaps(Peak_list_H3K27ac$Cas9_H24_peak_intersect_replicates, Peak_list_H2BK120ac$Cas9_H24_peak_intersect_replicates, maxgap = 2000, ignore.strand = TRUE )
+
+olap <- subsetByOverlaps(Peak_list_H3K27ac$Cas9_H24_peak_intersect_replicates, Peak_list_H2BK120ac$Cas9_H24_peak_intersect_replicates, maxgap = 2000, minoverlap = 1000, type = "start", ignore.strand = TRUE )
+
+olap <- subsetByOverlaps(Peak_list_H3K27ac$Cas9_H6_peak_intersect_replicates, Peak_list_H2BK120ac$Cas9_H6_peak_intersect_replicates, maxgap = 2000, ignore.strand = TRUE )
+```
+
+
+```{r}
+IDR_CAS9_normoxia <- read.delim("/media/alessio/Data/hypoxia/ChIPseq/IDR_H3K27AC/idr_results/Cas9_normoxia", header = F)
+```
+
+#Faccio gene ontology enrichment su picchi esclusivi H4KO per H3K27ac (calcolati con bedtools intersect)
+
+#carico files e trasformo in vettori solo con i SYMBOL unici (deduplico)
+```{r}
+txdb = TxDb.Hsapiens.UCSC.hg38.knownGene::TxDb.Hsapiens.UCSC.hg38.knownGene
+
+path = "/media/alessio/Data/hypoxia/ChIPseq/intersection/H3K27AC"
+files = c("H4KO_normoxia_diffpeaks.bed", "H4KO_H6_diffpeaks.bed", "H4KO_H24_diffpeaks.bed", "CAS9_normoxia_diffpeaks.bed", "CAS9_H6_diffpeaks.bed", "CAS9_H24_diffpeaks.bed")
+
+
+#H4KO
+H4KO.exclusive.peaks.anno <- list()
+
+for (i in files[1:3]) {
+  name = str_remove(i, ".bed")
+  tmppath = file.path(path,i)
+  tmpdf = readPeakFile(tmppath)
+  tmpdf = as.data.frame(annotatePeak(TxDb = txdb, 
+                       peak = tmpdf,
+                       columns = c("ENTREZID", "ENSEMBL", "SYMBOL", "GENENAME"),
+                       annoDb="org.Hs.eg.db",
+                       tssRegion=c(-3000, 3000)))
+  tmpdf = tmpdf |> 
+     dplyr::filter(V5 >= 100)
+  H4KO.exclusive.peaks.anno[[name]] <- na.omit(unique(tmpdf$SYMBOL))
+  rm(tmpdf)
+}
+
+for (i in names(H4KO.exclusive.peaks.anno)) {
+L <- length(H4KO.exclusive.peaks.anno[[i]])
+print(L)
+
+}
+
+
+#CAS9
+CAS9.exclusive.peaks.anno <- list()
+
+for (i in files[4:6]) {
+  name = str_remove(i, ".bed")
+  tmppath = file.path(path,i)
+  tmpdf = readPeakFile(tmppath)
+  tmpdf = as.data.frame(annotatePeak(TxDb = txdb, 
+                       peak = tmpdf,
+                       columns = c("ENTREZID", "ENSEMBL", "SYMBOL", "GENENAME"),
+                       annoDb="org.Hs.eg.db",
+                       tssRegion=c(-3000, 3000)))
+    tmpdf = tmpdf |> 
+     dplyr::filter(V5 >= 100)
+  CAS9.exclusive.peaks.anno[[name]] <- na.omit(unique(tmpdf$SYMBOL))
+  rm(tmpdf)
+}
+
+for (i in names(CAS9.exclusive.peaks.anno)) {
+L <- length(CAS9.exclusive.peaks.anno[[i]])
+print(L)
+}
+```
+
+#Vedo overlap preliminarmente(giusto per farmi un idea)
+```{r}
+venn.diagram(
+  x = list(H4KO = H4KO.exclusive.peaks.anno$H4KO_normoxia_diffpeaks, CAS9 = CAS9.exclusive.peaks.anno$CAS9_normoxia_diffpeaks),
+  category.names = c("H4KO", "CAS9"),
+  filename = "pupi.png",
+  disable.logging = T,
+  imagetype = "png"
+)
+```
+
+#dal momento che abbiamo dei geni in comune, e questo è dato dal fatto che un picco esclusivo di un dataset non significa che anche il gene sia esclusivo, devo rimuovere i geni in comune
+```{r}
+H4KO.exclusive.peaks.anno.genescommonwithcas9removed <- list()
+
+for (i in seq_along(H4KO.exclusive.peaks.anno)) {
+  namex <- names(H4KO.exclusive.peaks.anno[i])
+  vector <- H4KO.exclusive.peaks.anno[[i]]
+  vector <- vector[!vector %in% CAS9.exclusive.peaks.anno[[i]]]
+  
+  H4KO.exclusive.peaks.anno.genescommonwithcas9removed[[namex]] <- vector
+}
+```
+
+#Gene ontology sui geni specifici
+```{r}
+GO_enrichment_H4KO.exclusive.peaks.anno.genescommonwithcas9removed <- lapply(H4KO.exclusive.peaks.anno.genescommonwithcas9removed, function(vector) {
+  GO <- enrichGO(gene = vector,
+                   OrgDb = org.Hs.eg.db,
+                    keyType = "SYMBOL",
+                         ont  = "ALL",
+                         pAdjustMethod = "BH",
+                         qvalueCutoff  = 0.2,
+                 pvalueCutoff = 0.05
+                        )
+  return(GO)
+})
+
+
+for (i in names(GO_enrichment_H4KO.exclusive.peaks.anno.genescommonwithcas9removed)) {
+  dotplot <- dotplot(GO_enrichment_H4KO.exclusive.peaks.anno.genescommonwithcas9removed[[i]], showCategory=20, color = "p.adjust")
+  print(dotplot)
+}
+```
+
+

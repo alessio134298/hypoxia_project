@@ -1,0 +1,50 @@
+```{r setup, echo = FALSE}
+library(tidyverse)
+library(devtools)
+library(CHIPIN)
+library(AnnotationHub)
+```
+
+#Count matrix con conte di RNA seq da dare a chipin (devo selezionare gli stesis campioni dei campioni di chip da normalizzare )
+```{r}
+RNAseq_counts <- read.csv("/media/alessio/Data/hypoxia/RNAseq/STAR_Count_matrix_raw.csv") |> 
+  dplyr::rename(gene_id = X)
+```
+
+
+#Genes from annotationHub
+```{r, echo = FALSE}
+ah <- AnnotationHub(localHub = FALSE)
+query(ah , c("Homo sapiens", "Ensembl","EnsDb", "110"))
+edb <- ah[["AH113665"]]
+gns <- as.data.frame(genes(edb, return.type = "DataFrame")) 
+  
+
+rm(edb, ah)
+```
+
+#sistemo Count matrix
+```{r}
+RNAseq_counts_final <- RNAseq_counts |> 
+  left_join(gns, by = "gene_id") |> 
+  dplyr::select(matches("rep1|rep2|repB|symbol")) |> 
+  dplyr::select(matches("normoxia|6h|24h|symbol")) |> 
+  dplyr::relocate(symbol) 
+
+# CHIPIN_normalize(path_to_bw, type_norm="linear", TPM=NULL, RPKM=NULL, raw_read_count, path_to_file_with_constant_genes=NULL, sample_name, output_dir=".", organism, beforeRegionStartLength=4000, afterRegionStartLength=4000, regionBodyLength=40000, binSize=10, expression_plot=FALSE, compute_stat=FALSE, percentage=0.1, nGroup=20, histone_mark="ChIP-seq signal", nThreads=1)
+
+colnames(RNAseq_counts_final)
+```
+
+```{r}
+write.table(RNAseq_counts_final, file = "Raw_counts_for_Chipin_H3K27ac_samples.tab", row.names = F)
+```
+
+#normalizzo
+```{r}
+path_Chip_bw = file.path("/media/alessio/Data/hypoxia/ChIPseq/samples/H3K27AC", c("C1G", "C2G", "C1D", "C2D", "C1A", "C2A", "K125G1", "K125D1", "K125A1", "K26G1", "K26D1", "K26A1"), c("C1G_RPKM.bw", "C2G_RPKM.bw", "C1D_RPKM.bw", "C2D_RPKM.bw", "C1A_RPKM.bw", "C2A_RPKM.bw", "K125G1_RPKM.bw", "K125D1_RPKM.bw", "K125A1_RPKM.bw", "K26G1_RPKM.bw", "K26D1_RPKM.bw", "K26A1_RPKM.bw"))
+path_Chip_bw <- str_replace(path_Chip_bw, "_RPKM", "_NoNorm")
+
+CHIPIN_normalize(path_to_bw = path_Chip_bw, type_norm="linear", TPM=NULL, RPKM=NULL, raw_read_count = "Raw_counts_for_Chipin_H3K27ac_samples.tab", organism = "hg38", histone_mark = "ChIP-seq signal")
+```
+

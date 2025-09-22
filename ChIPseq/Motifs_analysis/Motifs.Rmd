@@ -1,0 +1,79 @@
+```{r setup, echo = F}
+library(tidyverse)
+library(ChIPseeker)
+library(ChIPpeakAnno)
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(memes)
+```
+
+#ChIPpeakanno (non funziona)
+```{r}
+Cas9.Normoxia.H3K27ac.SEs <- readPeakFile("/media/alessio/Data/hypoxia/ChIPseq/ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H3K27ac/CAS9_normoxia.bed")
+H4KO.Normoxia.H3K27ac.SEs <- readPeakFile("/media/alessio/Data/hypoxia/ChIPseq/ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H3K27ac/H4KO_normoxia.bed")
+
+Sequences.Cas9.Normoxia.H3K27ac.SEs <- getAllPeakSequence(myPeakList = Cas9.Normoxia.H3K27ac.SEs,
+                                                          genome = BSgenome.Hsapiens.UCSC.hg38)
+
+Sequences.H4KO.Normoxia.H3K27ac.SEs <- getAllPeakSequence(myPeakList = H4KO.Normoxia.H3K27ac.SEs,
+                                                          genome = BSgenome.Hsapiens.UCSC.hg38)
+
+
+write2FASTA(Sequences.Cas9.Normoxia.H3K27ac.SEs, file = "Cas9_normoxia_H3K27ac_SEs.fa")
+write2FASTA(Sequences.H4KO.Normoxia.H3K27ac.SEs, file = "H4KO_normoxia_H3K27ac_SEs.fa")
+
+
+# freqs <- oligoFrequency(BSgenome.Hsapiens.UCSC.hg38$chr1)
+# 
+# motif.summary.Cas9.Normoxia.H3K27ac.SEs <- oligoSummary(Sequences.Cas9.Normoxia.H3K27ac.SEs, 
+#                               oligoLength = 8,
+#                               MarkovOrder = 3,
+#                               freqs = freqs,
+#                               quickMotif = T)
+# 
+# motif.summary.H4KO.Normoxia.H3K27ac.SEs <- oligoSummary(Sequences.H4KO.Normoxia.H3K27ac.SEs, 
+#                               oligoLength = 8,
+#                               MarkovOrder = 3,
+#                               freqs = freqs,
+#                               quickMotif = TRUE)
+# 
+# motif.summary.Cas9.Normoxia.H3K27ac.SEs$motifs
+# motif.summary.H4KO.Normoxia.H3K27ac.SEs$motifs
+
+#non funziona, non da motivi arricchiti
+```
+
+
+#memes analysis
+```{r}
+Cas9.Normoxia.H3K27ac.SEs <- readPeakFile("/media/alessio/Data/hypoxia/ChIPseq/ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H3K27ac/CAS9_normoxia.bed")
+H4KO.Normoxia.H3K27ac.SEs <- readPeakFile("/media/alessio/Data/hypoxia/ChIPseq/ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H3K27ac/H4KO_normoxia.bed")
+
+sequences <- Cas9.Normoxia.H3K27ac.SEs |> 
+  get_sequence(BSgenome.Hsapiens.UCSC.hg38)
+
+dreme_results <- memes::runDreme(input = sequences, control = "shuffle")
+
+streme_results <- memes::runStreme(input = sequences, control = "shuffle")
+
+```
+
+```{r}
+# library(universalmotif)
+# options(meme_db = system.file("extdata/flyFactorSurvey_cleaned.meme", package = "memes", mustWork = TRUE))
+# data("dreme_example")
+
+full_results_dreme <- memes::runTomTom(input = dreme_results, database = "Databases/motif_databases/HUMAN/HOCOMOCOv11_core_HUMAN_mono_meme_format.meme")
+full_results_streme <- memes::runTomTom(input = streme_results, database = "Databases/motif_databases/HUMAN/HOCOMOCOv11_core_HUMAN_mono_meme_format.meme")
+
+```
+
+```{r}
+Cas9_24_vs_Cas9_normoxia_motifs <- read.delim("/media/alessio/Data/hypoxia/ChIPseq/Motifs_analysis/Cas9_24_vs_Cas9_normoxia_findMotifsGenome_output/knownResults.txt")
+Cas9_24_vs_Cas9_normoxia_motifs |> 
+  dplyr::filter(str_detect(Motif.Name, "Mef2"))
+
+H4KO_24_vs_H4KO_normoxia_motifs <- read.delim("/media/alessio/Data/hypoxia/ChIPseq/Motifs_analysis/H4KO_24_vs_H4KO_normoxia_findMotifsGenome_output/knownResults.txt")
+H4KO_24_vs_H4KO_normoxia_motifs |> 
+  dplyr::filter(str_detect(Motif.Name, "Mef2"))
+```
+
