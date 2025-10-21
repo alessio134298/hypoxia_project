@@ -1,0 +1,287 @@
+```{r setup}
+library(tidyverse)
+library(ggpubr)
+library(ChIPseeker)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene::TxDb.Hsapiens.UCSC.hg38.knownGene
+```
+
+### this analysis starts with the definition of the active, poised enhancers and H3K27ac only
+```{bash eval=FALSE, include=FALSE}
+# classify and save bed
+Rscript poised_active_enhancers_classification.r
+
+# calculate signal over these regions
+conda activate chip_atac
+python poised_active_enhancers_signal_calc.py
+```
+
+### Load data
+```{r}
+filex <- list.files('../tables', pattern = 'bcomp_RPKM_signal.csv', full.names = T)
+
+data <- tibble(files = filex, 
+                names = str_remove(basename(files), "_with_bcomp_RPKM_signal.csv"))
+
+data <- data %>% 
+  mutate(data = map(files, \(x) read_delim(x)))
+
+Cas9_data <- data %>% 
+  dplyr::filter(str_detect(names, 'Cas9'))
+
+H4KO_data <- data %>% 
+  dplyr::filter(str_detect(names, 'H4KO') & str_detect(names, 'H4KO_poised_to_active', negate = T))
+```
+
+# violin boxplot
+```{r}
+plot_func <- function(df) {
+  plot <- df %>% 
+    ggplot(aes(x = mark, fill = mark, y = RPKM)) +
+    geom_violin(position = position_dodge(width = 0.8)) +
+    geom_boxplot( width = 0.3,
+                  position = position_dodge(width = 0.8),
+                  outlier.shape = NA,
+                  color = "black") +
+    scale_fill_manual(values = c('H3K27ac' = '#ba226e',
+                                 'H2BK120ac' = '#059e54',
+                                 'H3K4me1' = '#104ade')) +
+    lims(y = c(-2, 6)) +
+    facet_wrap(~ names) +
+    stat_compare_means(comparisons = list(c('H3K27ac', 'H2BK120ac'),
+                                          c('H2BK120ac', 'H3K4me1'),
+                                          c('H3K27ac', 'H3K4me1')),
+                       method = 'wilcox.test',
+                       label = 'p.signif',
+                       vjust = 0.5) +
+    stat_compare_means(method = 'kruskal.test',
+                       vjust = 0.5, 
+                       size = 3) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1) 
+    )
+  
+  return(plot)
+}
+
+Cas9_data_long <- Cas9_data %>% 
+  unnest(data) %>% 
+  pivot_longer(cols = contains('RPKM'), names_to = "sample", values_to = 'RPKM') %>% 
+  mutate(sample = basename(sample)) %>% 
+  mutate(mark = case_when(
+    str_detect(sample, 'C1A|C2A') ~ 'H3K27ac',
+    str_detect(sample, 'C1B|C2B') ~ 'H2BK120ac',
+    str_detect(sample, 'C1C|C2C') ~ 'H3K4me1'
+  ))
+
+Cas9_enhancers_plot <- plot_func(Cas9_data_long) 
+
+H4KO_data_long <- H4KO_data %>% 
+  unnest(data) %>% 
+  pivot_longer(cols = contains('RPKM'), names_to = "sample", values_to = 'RPKM') %>% 
+  mutate(sample = basename(sample)) %>% 
+  mutate(mark = case_when(
+    str_detect(sample, 'K125A1|K26A1') ~ 'H3K27ac',
+    str_detect(sample, 'K125B1|K26B1') ~ 'H2BK120ac',
+    str_detect(sample, 'K125C1|K26C1') ~ 'H3K4me1'
+  ))
+
+H4KO_enhancers_plot <- plot_func(H4KO_data_long)
+
+Cas9_enhancers_plot + ggtitle('Cas9')
+H4KO_enhancers_plot + ggtitle('HDAC4 KO')
+```
+# save plots
+```{r}
+ggsave(Cas9_enhancers_plot + ggtitle('Cas9'),
+       filename = '../plot/boxplot_enhancers_poised_active_Cas9.pdf',
+       width = 8, height = 6,
+       device = 'pdf')
+ggsave(H4KO_enhancers_plot + ggtitle('HDAC4 KO'),
+       filename = '../plot/boxplot_enhancers_poised_active_H4KO.pdf',
+       width = 8, height = 6,
+       device = 'pdf')
+```
+
+# stratification into promoter, gene body TSS
+```{r}
+# we have already the coordinates of peaks so we just need to annotate them with chipseeker and return inside the information
+annotate_refine <- function(df) {
+  df <- df %>%
+  makeGRangesFromDataFrame(keep.extra.columns = T, seqnames.field = 'chrom', start.field = 'start', end.field = 'end') %>% 
+  annotatePeak(TxDb = txdb,
+               annoDb = 'org.Hs.eg.db',
+               tssRegion = c(-2000, 500)) %>%
+  as.data.frame() %>% 
+  mutate(anno_refined = case_when(
+    str_detect(annotation, 'Promoter|5\' UTR') ~ 'Promoter',
+    str_detect(annotation, 'Intergenic') ~ 'Intergenic',
+    TRUE ~ 'gene_body'
+  ))
+}
+
+Cas9_data_long_anno <- annotate_refine(Cas9_data_long)
+H4KO_data_long_anno <- annotate_refine(H4KO_data_long)
+```
+### summary of the classification into promoter, gene body and intergenic
+```{r}
+Cas9_data_long_anno %>%
+  dplyr::filter(!duplicated(start)) %>% 
+  group_by(names, anno_refined) %>%
+  summarize(count = n())
+
+H4KO_data_long_anno %>%
+  dplyr::filter(!duplicated(start)) %>% 
+  group_by(names, anno_refined) %>%
+  summarize(count = n())
+```
+# Plot
+```{r}
+plot_func_2 <- function(df) {
+  plot <- df %>% 
+    ggplot(aes(x = mark, fill = mark, y = RPKM)) +
+    geom_violin(position = position_dodge(width = 0.8)) +
+    geom_boxplot( width = 0.3,
+                  position = position_dodge(width = 0.8),
+                  outlier.shape = NA,
+                  color = "black") +
+    scale_fill_manual(values = c('H3K27ac' = '#ba226e',
+                                 'H2BK120ac' = '#059e54',
+                                 'H3K4me1' = '#104ade')) +
+    lims(y = c(-2, 6)) +
+    facet_wrap(~ names + anno_refined) +
+    stat_compare_means(comparisons = list(c('H3K27ac', 'H2BK120ac'),
+                                          c('H2BK120ac', 'H3K4me1'),
+                                          c('H3K27ac', 'H3K4me1')),
+                       method = 'wilcox.test',
+                       label = 'p.signif',
+                       vjust = 0.5) +
+    stat_compare_means(method = 'kruskal.test',
+                       vjust = 0.5, 
+                       size = 3) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1) 
+    )
+  return(plot)
+}
+
+Cas9_enhancers_plot_stratified <- plot_func_2(Cas9_data_long_anno)
+H4KO_enhancers_plot_stratified <- plot_func_2(H4KO_data_long_anno)
+
+Cas9_enhancers_plot_stratified + ggtitle('Cas9')
+H4KO_enhancers_plot_stratified + ggtitle('HDAC4 KO')
+```
+
+### save plots
+```{r}
+ggsave(Cas9_enhancers_plot_stratified + ggtitle('Cas9'), filename = '../plot/boxplot_enhancers_poised_active_Cas9_stratified.png', width = 8, height = 9)
+ggsave(H4KO_enhancers_plot_stratified + ggtitle('HDAC4 KO'), filename = '../plot/boxplot_enhancers_poised_active_H4KO_stratified.png', width = 8, height = 9)
+```
+
+## Observations:
+The classification of poised and active enhancers make sense by looking at the coverage.
+I was expecting H2BK120ac to have major signal over poised enhancers and especially in intergenic regions but it is not the case, or very very slight.
+
+
+```{r}
+# add . Two-sided Mann–Whitney U-test, adjusted for multiple comparisons
+# using the Benjamini–Hochberg method; NS, not significant
+```
+
+
+# Poised to active with HDAC4 binding site
+Now we want to see if regions that exhibits a shift from poised to active enhancers in HDAC4 KO are more enriched in some marker, or by subsetting these regions for the co-presence of HDAC4 peaks.
+
+```{r}
+# we recycle te functions used before
+H4KO_data_poised_to_active <- data %>% 
+  dplyr::filter(str_detect(names, 'H4KO_poised_to_active'))
+
+H4KO_data_poised_to_active_long <- H4KO_data_poised_to_active %>% 
+  unnest(data) %>% 
+  pivot_longer(cols = contains('RPKM'), names_to = "sample", values_to = 'RPKM') %>% 
+  mutate(sample = basename(sample)) %>% 
+  mutate(mark = case_when(
+    str_detect(sample, 'K125A1|K26A1') ~ 'H3K27ac',
+    str_detect(sample, 'K125B1|K26B1') ~ 'H2BK120ac',
+    str_detect(sample, 'K125C1|K26C1') ~ 'H3K4me1'
+  ))
+
+# Plot
+H4KO_data_poised_to_active_long_plot <- plot_func(H4KO_data_poised_to_active_long)
+H4KO_data_poised_to_active_long_plot + ggtitle('HDAC4 KO poised to active')
+
+# annotate and plot
+H4KO_data_poised_to_active_long_anno <- annotate_refine(H4KO_data_poised_to_active_long)
+H4KO_data_poised_to_active_plot_stratified <- plot_func_2(H4KO_data_poised_to_active_long_anno) + lims(y = c(-2, 6))
+H4KO_data_poised_to_active_plot_stratified
+```
+```{r}
+ggsave(H4KO_data_poised_to_active_plot_stratified, filename ='../plot/boxplot_H4KO_posied_to_active.png', height = 7, width = 7)
+```
+
+
+### HDAC4 peaks
+```{r}
+HDAC4_peaks <- readPeakFile('../../../NAR2020_Cb/GSM3882325_HDAC4_DMSO_SKUT_peaks.narrowPeak')
+
+overlaps_with_HDAC4 <- unique(
+  queryHits(
+  findOverlaps(
+    H4KO_data_poised_to_active_long_anno %>% 
+      makeGRangesFromDataFrame(keep.extra.columns = T),
+    HDAC4_peaks)
+  )
+)
+
+# create a bed of poised to active with HDAC4
+H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info <- H4KO_data_poised_to_active_long_anno
+H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info$overlaps_HDAC4 <- 'no'
+H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info$overlaps_HDAC4[overlaps_with_HDAC4] <- 'yes'
+H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info$overlaps_HDAC4 <- 
+  factor(H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info$overlaps_HDAC4,
+         levels = c("no", "yes"))
+
+library(ggplot2)
+library(ggpubr)
+library(dplyr)
+
+H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info_plot <- H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info %>%
+  ggplot(aes(x = overlaps_HDAC4, y = RPKM, fill = overlaps_HDAC4)) +
+  geom_violin(position = position_dodge(width = 0.8)) +
+  geom_boxplot(
+    width = 0.3,
+    position = position_dodge(width = 0.8),
+    outlier.shape = NA,
+    color = "black"
+  ) +
+  scale_fill_manual(values = c("yes" = "red",
+                               "no" = "blue")) +
+  facet_wrap(~ mark, scales = "free_x") +
+  stat_compare_means(
+    comparisons = list(c("yes", "no")),
+    method = "wilcox.test",
+    label = "p.signif",
+    vjust = 0.5
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)
+  ) +
+  lims(y =c(-2, 6))
+
+H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info_plot
+```
+
+### save
+```{r}
+ggsave(H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info_plot,
+       filename= '../plot/HDAC4_presence_boxplot_H4KO_posied_to_active.pdf',
+       height = 6, width = 6,
+       device = 'pdf')
+```
+
+
+
+

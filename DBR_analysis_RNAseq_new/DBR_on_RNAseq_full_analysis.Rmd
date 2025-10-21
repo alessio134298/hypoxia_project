@@ -59,6 +59,12 @@ VSD <- assay(VST) |>
   left_join(id_symbol, join_by('gene_id' == 'gene_id_version'))
 
 VSD |> write_csv('VSD_normoxia_newsamples.csv')
+
+DESeq2::counts(DDS, normalized = TRUE) |> 
+  as.data.frame() |> 
+  rownames_to_column('gene_id') |> 
+  mutate(gene_id = str_remove(gene_id, "\\..*")) %>% 
+  write_csv('Norm_counts_normoxia_newsamples.csv')
 ```
 
 ### save the upregulated and downregulated
@@ -145,6 +151,12 @@ Genes_DOWN_H4KO_vs_Cas9_norm <- openxlsx::read.xlsx("../RNAseq/Tab_files/Upreg_c
 Genes_DOWN_H4KO_vs_Cas9_norm <- na.omit(Genes_DOWN_H4KO_vs_Cas9_norm$X1)
 Genes_DOWN_H4KO_vs_Cas9_norm <- Genes_DOWN_H4KO_vs_Cas9_norm[Genes_DOWN_H4KO_vs_Cas9_norm != ""]
 ```
+
+# Or with the new clones 2025
+```{r}
+Genes_UP_H4KO_vs_Cas9_norm <- read_lines('../RNAseq2025/HDAC4_KO_vs_ctrl_normoxia_intersect_clones_sep.txt')
+```
+
 
 # DBRs genes
 ```{r}
@@ -258,8 +270,6 @@ grid::grid.draw(X)
 
 Genes_shared_all_SEs_HiC <- Genes_UP_H4KO_vs_Cas9_norm[Genes_UP_H4KO_vs_Cas9_norm %in% Genes_SEs_H3K27ac_HiC &
                             Genes_UP_H4KO_vs_Cas9_norm %in% Genes_SEs_H2BK120ac_HiC]
-
-
 ```
 
 # I already did in the other script (Hic_genes_DBR.Rmd) a boxplot with the VSD
@@ -300,11 +310,16 @@ write_lines(Genes_shared_all_TEs_HiC, file = "Genes_Up_shared_TEs_HiC.txt")
 write_lines(Genes_shared_all_SEs_HiC, file = "Genes_Up_shared_SEs_HiC.txt")
 
 
-Genes_Up_H3K27ac_DBR_promoter <- Genes_UP_H4KO_vs_Cas9_norm[Genes_UP_H4KO_vs_Cas9_norm %in% Genes_DBR_H3K27ac_onPromoter]
-Genes_Up_H2BK120ac_DBR_promoter <- Genes_UP_H4KO_vs_Cas9_norm[Genes_UP_H4KO_vs_Cas9_norm %in% Genes_DBR_H2BK120ac_onPromoter]
+# Genes_Up_H3K27ac_DBR_promoter <- Genes_UP_H4KO_vs_Cas9_norm[Genes_UP_H4KO_vs_Cas9_norm %in% Genes_DBR_H3K27ac_onPromoter]
+# Genes_Up_H2BK120ac_DBR_promoter <- Genes_UP_H4KO_vs_Cas9_norm[Genes_UP_H4KO_vs_Cas9_norm %in% Genes_DBR_H2BK120ac_onPromoter]
+# 
+# write_lines(Genes_Up_H3K27ac_DBR_promoter, file="Genes_Up_H3K27ac_DBR_promoter.txt")
+# write_lines(Genes_Up_H2BK120ac_DBR_promoter, file="Genes_Up_H2BK120ac_DBR_promoter.txt")
 
-write_lines(Genes_Up_H3K27ac_DBR_promoter, file="Genes_Up_H3K27ac_DBR_promoter.txt")
-write_lines(Genes_Up_H2BK120ac_DBR_promoter, file="Genes_Up_H2BK120ac_DBR_promoter.txt")
+# Let's take also the genes that are only shared between H3K27ac and RNAseq and H2BK120AC and RNAseq
+Genes_Up_DBR_promoter_both_marks_also_not_common <- unique(Genes_UP_H4KO_vs_Cas9_norm[Genes_UP_H4KO_vs_Cas9_norm %in% Genes_DBR_H3K27ac_onPromoter | Genes_UP_H4KO_vs_Cas9_norm %in% Genes_DBR_H2BK120ac_onPromoter])
+write_lines(Genes_Up_DBR_promoter_both_marks_also_not_common, file="Genes_Up_H3K27ac_and_H2BK120ac_promoter.txt")
+
 ```
 
 ###############################################################
@@ -318,8 +333,7 @@ VSD <- read_csv("VSD_normoxia_newsamples.csv") |>
 
 core_genes_list <- list(
   Genes_Up_shared_DBR_promoter = read_lines("Genes_Up_shared_DBR_promoter.txt"),
-  Genes_Up_H3K27ac_DBR_promoter = read_lines("Genes_Up_H3K27ac_DBR_promoter.txt"),
-  Genes_Up_H2BK120ac_DBR_promoter = read_lines("Genes_Up_H2BK120ac_DBR_promoter.txt"),
+  Genes_Up_DBR_promoter_both_marks_also_not_common = read_lines("Genes_Up_H3K27ac_and_H2BK120ac_promoter.txt"),
   Genes_Up_shared_all_TEs_HiC = read_lines("Genes_Up_shared_TEs_HiC.txt"),
   Genes_Up_shared_all_SEs_HiC = read_lines("Genes_Up_shared_SEs_HiC.txt")  
 )
@@ -350,10 +364,14 @@ for (i in names(core_genes_list)) {
 ```
 
 # Heatmap with signal of Acetylation
+### load the file of the tss with bigwigs signal and apply log transformtion
 ```{r}
-Table_Signal_Bw_TSS <- read_delim("../ChIPseq/TSS_bw_signal.bed") %>% 
+Table_Signal_Bw_TSS <- read_delim("../ChIPseq/TSS_bw_signal_bcoverage.bed") %>% 
   dplyr::mutate(symbol = str_extract(id, "(?<=gene_name )[^;]+")) |> 
-  dplyr::filter(!is.na(symbol) & !duplicated(symbol))
+  dplyr::filter(!is.na(symbol) & !duplicated(symbol)) %>% 
+  dplyr::mutate(across(contains("RPKM"), log2))
+
+
 ```
 
 # Load HDAC4 peaks and intersect with promoters, so adding the infos
@@ -584,12 +602,12 @@ HDAC4_MEF2D_acetylation_signal_df <- bind_cols(Table_Signal_Bw_TSS_HDAC4, MEF2D_
 # Create the dataframes for heatmap filtering on the gene lists
 ```{r}
 filter_df <- function(df, genes) {
-  
   df_f <- df %>% 
-    dplyr::filter(symbol %in% core_genes_list[[i]])  %>% 
-    dplyr::select(c(symbol, contains("RPKM"), HDAC4_counts, HDAC4_on_distal_element, MEF2D_counts, MEF2D_on_distal_element)) %>% 
+    dplyr::filter(symbol %in% genes) %>%       # use argument
+    dplyr::select(c(symbol, contains("RPKM"), 
+                    HDAC4_counts, HDAC4_on_distal_element, 
+                    MEF2D_counts, MEF2D_on_distal_element)) %>% 
     column_to_rownames("symbol")
-  
   return(df_f)
 }
 
@@ -607,6 +625,9 @@ for (i in names(core_genes_list)) {
 ```{r}
 df_Chip <- Acetylation_signal_list$Acetylation_Up_shared_DBR_promoter
 df_Vsd <- VSD_groups_list$VSD_Up_shared_DBR_promoter
+
+# df_Chip <- Acetylation_signal_list$Acetylation_Up_DBR_promoter_both_marks_also_not_common
+# df_Vsd <- VSD_groups_list$VSD_Up_DBR_promoter_both_marks_also_not_common
 
 # this for reorder correctly the rows
 common_genes <- intersect(rownames(df_Vsd), rownames(df_Chip))
@@ -628,10 +649,10 @@ Core_Genes_Hmap_VSD_promoter <- Heatmap(matrix = df_Vsd,
 Acetylation_Hmap_Signal_promoter <- Heatmap(matrix = 
         df_Chip[, -c(9,10,11,12)], #HDAC4 counts is the 9 col
         cluster_columns = F,
-        name = "RPKM log2 ratio ChIP / Input",
-        col = colorRamp2(colors = c("green","white", "blue"), breaks = c(
-          min(df_Chip), medium = 0,
-          max(df_Chip))
+        name = "log2 RPKM",
+        col = colorRamp2(colors = c("white", "blue"), breaks = c(
+          min(df_Chip[, -c(9,10,11,12)]),
+          max(df_Chip[, -c(9,10,11,12)]))
           ),
         column_spl = c(rep("H3K27ac", 4), rep ("H2BK120ac", 4)),
         rect_gp = gpar(col = "black", lwd = 0.5)
@@ -690,8 +711,9 @@ Hmap_promoter <- Core_Genes_Hmap_VSD_promoter +
   MEF2D_mini_Hmap +
   MEF2D_distal_mini_Hmap
 
-png("Heatmap_Promoter.png", width = 22, height = 24, units = "cm", res = 600, bg = "transparent")
-draw(Hmap_promoter, background = NA)
+png("Heatmap_Promoter.png", width = 22, height = 25, units = "cm", res = 600, bg = "transparent")
+# png("Heatmap_Promoter_alsonotshared.png", width = 22, height = 40, units = "cm", res = 600, bg = "transparent")
+draw(Hmap_promoter, background = 'white')
 dev.off()
 
 Hmap_promoter
@@ -707,4 +729,12 @@ HDAC4_peak_on_NFIB <- subsetByOverlaps(HDAC4_peaks, NFIB_promoter)
 
 # convert to bed
 HDAC4_peak_on_NFIB %>% as.data.frame() %>% dplyr::select(seqnames, start, end) %>% write_delim('HDAC4_on_NFIB_promoter.bed', col_names = F, delim='\t')
+```
+
+
+# Let's take also the genes that are only shared between H3K27ac and RNAseq and H2BK120AC and RNAseq
+```{r}
+Genes_Up_DBR_promoter_both_marks_also_not_common <- unique(Genes_UP_H4KO_vs_Cas9_norm[Genes_UP_H4KO_vs_Cas9_norm %in% Genes_DBR_H3K27ac_onPromoter | Genes_UP_H4KO_vs_Cas9_norm %in% Genes_DBR_H2BK120ac_onPromoter])
+
+Genes_Up_DBR_promoter_both_marks_also_not_common
 ```

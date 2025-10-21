@@ -1,0 +1,376 @@
+---
+DGE analysis
+---
+
+```{r setup}
+suppressMessages({
+  library(tidyverse)
+  library(DESeq2)
+  library(AnnotationHub)
+  library(tximeta)
+  library(clusterProfiler)
+})
+
+volcano_path <- '../plot/volcanos/'
+go_path <- '../plot/Gene_ontology/'
+venn_path <- '/media/alessio/Data/hypoxia/RNAseq2025/plot/venn/'
+
+Volcanoplot <- function(df, title) {
+  
+  up <- nrow(df[df$DEG == 'UP', 'DEG'])
+  down <- nrow(df[df$DEG == 'DOWN', 'DEG'])
+  
+  df %>% 
+    ggplot(aes(x = log2FoldChange, y = -log10(pvalue), color = DEG)) +
+    geom_point(alpha = 0.7) +
+    scale_color_manual(values = c("UP" = "red", "DOWN" = "blue", "ns" = "black")) +
+    labs(title = title,
+         subtitle = paste0('UP: ',up,
+                           '\nDOWN: ',down),
+         color = NULL) +
+    theme_bw()
+}
+
+L2FC = 0.75
+```
+
+# load data and classify UP and DOWN regulated
+```{r}
+files <- list.files('../DEGs_tabs', full.names = T)
+
+DEGs_results <- tibble(files = files)
+DEGs_results <- DEGs_results %>% 
+  dplyr::mutate(deseq_res = map(files, \(x) read_delim(x))) %>% 
+  dplyr::mutate(files = str_remove(basename(files), '.tsv')) %>% 
+  dplyr::mutate(deseq_res = map(
+    deseq_res, \(x) x %>% 
+      dplyr::mutate(DEG = case_when(
+        (padj < 0.05 & log2FoldChange > L2FC) ~ 'UP',
+        (padj < 0.05 & log2FoldChange < -L2FC) ~ 'DOWN',
+        TRUE ~ 'ns'
+      )
+      )
+  )
+  )
+```
+
+# Check of the difference of the two clones with their controls at 0h 
+### venn of shared genes, volcano and pathway enrichment
+```{r}
+H4KO_vs_ctrl_0h <- DEGs_results %>% 
+  dplyr::filter(files %in% c('H4KO_125_vs_ctrl_0h',
+                             'H4KO_26_vs_ctrl_0h')
+                )
+
+# volcano and enrichment dotplot sep clones
+genes_up_H4KO_vs_ctrl <- list()
+
+for (i in H4KO_vs_ctrl_0h$files) {
+  df <- H4KO_vs_ctrl_0h %>% 
+    dplyr::filter(files == i) %>% 
+    unnest()
+  
+  # volcano
+  P <- Volcanoplot(df, i) + lims(x = c(-15, 15))
+  print(P)
+  
+  genes_up <- na.omit(unique(df[df$DEG == 'UP', ]$symbol))
+  
+  genes_up_H4KO_vs_ctrl[[i]] <- genes_up
+  # GO enrichment
+  GO_enrichment <- enrichGO(genes_up,
+                            ont = "BP",
+                            keyType = "SYMBOL",
+                            OrgDb = "org.Hs.eg.db")
+
+  dt <- dotplot(GO_enrichment, title = i)
+  print(dt)
+  # save plots
+  ggsave(P, filename = paste0(volcano_path,i,'_volcano.png'), height = 6, width = 6)
+  ggsave(dt, filename = paste0(go_path,i,'_go.png'), height = 6, width = 6)
+}
+
+VennDiagram::venn.diagram(genes_up_H4KO_vs_ctrl, 
+                          disable.logging = T, 
+                          filename = paste0(venn_path,'HDAC4_KO_vs_ctrl_clones_sep_intersect.png'),
+                          margin = 0.1, imagetype = 'png')
+
+write_lines(Reduce(intersect, genes_up_H4KO_vs_ctrl), '../HDAC4_KO_vs_ctrl_normoxia_intersect_clones_sep.txt')
+```
+
+# Check hypoxia response of the clones separated
+```{r}
+# prepare data
+Vs_normoxia <- DEGs_results %>% 
+  dplyr::filter(str_detect(files, 'interaction|ctrl', negate = T)) %>% 
+  dplyr::mutate(clone = str_remove(files, '_0h|_6h|_24h|_48h')) %>% 
+  dplyr::mutate(time = case_when(
+    str_detect(files, '6h') ~ '6h',
+    str_detect(files, '24h') ~ '24h',
+    TRUE ~ '48h'
+  )) %>% 
+  arrange(time)
+
+# Barplot with summary of number of DEGs genes
+Vs_normoxia_summary_DEGs_number <- Vs_normoxia %>% 
+  unnest() %>% 
+  dplyr::select(clone, DEG, time) %>%
+  group_by(clone, DEG, time) %>% 
+  summarize(count = n()) %>% 
+  arrange(time) %>% 
+  dplyr::filter(DEG != 'ns')
+
+#Plot
+barplot_degs <- Vs_normoxia_summary_DEGs_number %>% 
+  dplyr::mutate(count = ifelse(DEG == "UP", count, -count)) %>%
+  dplyr::mutate(time = fct_relevel(time, c("6h", "24h", "48h"))
+  ) %>%
+  ggplot(aes(x = time, y = count, fill = DEG)) +
+  geom_col(color = "black", width = 0.5) +
+  scale_fill_manual(values = c("UP" = "#eb1719", "DOWN" = "#4baae8")) +
+  geom_text(aes(x = time,
+                y = ifelse(DEG == "UP", count + 200, count -200),
+                label = ifelse(DEG == "UP", count, -count))) +
+  facet_wrap(~ clone, scales = "free_x", ncol = 4) +
+  theme_bw() +
+  labs(x = NULL,
+       y = NULL) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.text.y=element_blank())
+
+barplot_degs
+```
+### save barplot
+```{r}
+ggsave(barplot_degs, filename = '../plot/barplot_degs_hypoxia.png', height = 6, width = 9)
+```
+
+
+### volcano and Gene Ontology enrichemnt
+```{r}
+GO_enrichment_list <- list()
+
+
+for (i in Vs_normoxia$files) {
+  df <- Vs_normoxia %>% 
+    dplyr::filter(files == i) %>% 
+    unnest()
+  
+  P <- Volcanoplot(df, i) + lims(x = c(-15, 15))
+  print(P)
+  
+  genes_up <- df[df$DEG == 'UP', ]$symbol
+  
+  GO_enrichment <- enrichGO(genes_up, 
+                            ont = "BP",
+                            keyType = "SYMBOL",
+                            OrgDb = "org.Hs.eg.db")
+  
+  GO_enrichment_list[[i]] <- GO_enrichment  
+  
+  dt <- dotplot(GO_enrichment, title = i)
+  
+  print(dt)
+  ggsave(P, filename = paste0(volcano_path,i,'_volcano.png'), height = 6, width = 6)
+  ggsave(dt, filename = paste0(go_path,i,'_go.png'), height = 6, width = 6)
+  
+}
+```
+
+# summarize the results of hypoxia time response gene ontology
+```{r}
+GO_enrichment_list_long <- GO_enrichment_list %>% 
+  enframe(name = 'sample', value = 'GO') %>% 
+  dplyr::mutate(GO = map(GO, \(x) as.data.frame(x))) %>% 
+  unnest() %>% 
+  dplyr::filter(str_detect(Description, 'Hypox|hypox|xygen')) %>% 
+  mutate(
+    sample = fct_relevel(
+      sample, 
+      c(
+        "Cas9_125_6h", "Cas9_125_24h", "Cas9_125_48h",
+        "Cas9_26_6h", "Cas9_26_24h", "Cas9_26_48h",
+        "H4KO_125_6h", "H4KO_125_24h", "H4KO_125_48h",
+        "H4KO_26_6h", "H4KO_26_24h", "H4KO_26_48h"
+      )
+    )
+  )
+
+
+plot_summary_hypoxia_go <- GO_enrichment_list_long %>% 
+  ggplot(aes(x = sample, y = Description)) +
+  geom_point(aes(size = Count, color = -log10(qvalue))) +
+  scale_color_gradient(low = "blue", high = "red") +
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+
+ggsave(plot_summary_hypoxia_go, filename = '../plot/bubbleplot_summary_hypoxia_go.png', height = 5, width = 8)
+```
+
+# interaction terms analysis
+### we want to find genes commonly de-regulated in both HDAC4 KO clones
+### we do this on both the deseq results of interaction taken the clones together or separated and then taking the common at the end
+```{r}
+L2FC = 0.5
+
+# clones 125 and 26 together treated as replicates
+pathx <- '/media/alessio/Data/hypoxia/RNAseq2025/interaction_hypoxia_repclones'
+hypoxia_interaction <- DEGs_results %>% 
+  dplyr::filter(str_detect(files, '^H4KO_vs_ctrl(.*)interaction$')) %>% 
+  dplyr::mutate(time = case_when(
+    str_detect(files, '6h') ~ '6h',
+    str_detect(files, '24h') ~ '24h',
+    str_detect(files, '48h') ~ '48h'
+  ))  %>% 
+  dplyr::mutate(deseq_res = map(
+    deseq_res, \(x) x %>% 
+      dplyr::mutate(DEG = case_when(
+        (padj < 0.05 & log2FoldChange > L2FC) ~ 'UP',
+        (padj < 0.05 & log2FoldChange < -L2FC) ~ 'DOWN',
+        TRUE ~ 'ns'
+      )
+      )
+  )
+  )
+
+UP_genes <- list()
+for (i in unique(hypoxia_interaction$time)) {
+  df <- hypoxia_interaction %>%
+    dplyr::filter(time == i)
+
+  print(paste0('Time is: ',i))
+
+  UP <- df %>%
+      unnest(deseq_res) %>%
+      dplyr::filter(DEG == 'UP')
+  
+  print(paste0('number of Upreg for ',i,' is: ',nrow(UP)))
+  
+  UP_genes[[i]] <- na.omit(UP$symbol)
+  
+}
+
+DOWN_genes <- list()
+for (i in unique(hypoxia_interaction$time)) {
+  df <- hypoxia_interaction %>%
+    dplyr::filter(time == i)
+
+  print(paste0('Time is: ',i))
+
+  DOWN <- df %>%
+      unnest(deseq_res) %>%
+      dplyr::filter(DEG == 'DOWN')
+  
+  print(paste0('number of Upreg for ',i,' is: ',nrow(DOWN)))
+  
+  DOWN_genes[[i]] <- na.omit(DOWN$symbol)
+}
+
+for (i in names(UP_genes)) {
+  file = paste0(pathx,'/','up_interaction_',i,'.txt')
+  write_lines(UP_genes[[i]], file = file)
+}
+
+for (i in names(DOWN_genes)) {
+  file = paste0(pathx,'/','down_interaction_',i,'.txt')
+  write_lines(DOWN_genes[[i]], file = file)
+}
+
+
+# clones separated
+pathx <- '/media/alessio/Data/hypoxia/RNAseq2025/interaction_hypoxia_common'
+
+hypoxia_interaction_sep_clones <- DEGs_results %>% 
+  dplyr::filter(str_detect(files, '^H4KO_(26|125)(.*)interaction$')) %>% 
+  dplyr::mutate(time = case_when(
+    str_detect(files, '6h') ~ '6h',
+    str_detect(files, '24h') ~ '24h',
+    str_detect(files, '48h') ~ '48h'
+  ))  %>% 
+  dplyr::mutate(deseq_res = map(
+    deseq_res, \(x) x %>% 
+      dplyr::mutate(DEG = case_when(
+        (padj < 0.05 & log2FoldChange > L2FC) ~ 'UP',
+        (padj < 0.05 & log2FoldChange < -L2FC) ~ 'DOWN',
+        TRUE ~ 'ns'
+      )
+      )
+  )
+  )
+
+
+# Upregulated common of interaction
+Up_intersect <- list()
+for (i in unique(hypoxia_interaction_sep_clones$time)) {
+  df <- hypoxia_interaction_sep_clones %>%
+    dplyr::filter(time == i)
+
+  print(paste0('Time is: ',i))
+
+  common_UP <- list()
+  for (j in unique(df$files)) {
+    UP <- df %>%
+      dplyr::filter(files == j) %>%
+      unnest(deseq_res) %>%
+      dplyr::filter(DEG == 'UP')
+
+    print(paste0('number of Upreg for ',j,' is: ',nrow(UP)))
+    common_UP[[j]] <- UP$symbol
+  }
+  common_UP <- na.omit(Reduce(intersect, common_UP))
+
+  print(paste0('Commonly upregulated are: ',length(common_UP)))
+
+  Up_intersect[[i]] <- common_UP
+}
+
+# Down regulated common of interaction
+Down_intersect <- list()
+for (i in unique(hypoxia_interaction_sep_clones$time)) {
+  df <- hypoxia_interaction_sep_clones %>%
+    dplyr::filter(time == i)
+
+  print(paste0('Time is: ',i))
+
+  common_DOWN <- list()
+  for (j in unique(df$files)) {
+    DOWN <- df %>%
+      dplyr::filter(files == j) %>%
+      unnest(deseq_res) %>%
+      dplyr::filter(DEG == 'DOWN')
+
+    print(paste0('number of Downreg for ',j,' is: ',nrow(DOWN)))
+    common_DOWN[[j]] <- DOWN$symbol
+  }
+  common_DOWN <- na.omit(Reduce(intersect, common_DOWN))
+
+  print(paste0('Commonly Downregulated are: ',length(common_DOWN)))
+
+  Down_intersect[[i]] <- common_DOWN
+}
+
+Up_intersect
+Down_intersect
+
+for (i in names(Up_intersect)) {
+  file = paste0(pathx,'/','up_common_interaction_',i,'.txt')
+  write_lines(Up_intersect[[i]], file = file)
+}
+
+for (i in names(Down_intersect)) {
+  file = paste0(pathx,'/','down_common_interaction_',i,'.txt')
+  write_lines(Down_intersect[[i]], file = file)
+}
+
+```
+what happens here is that we have some genes that have different behavior in HDAC4 KO than in KO,
+For example the Up-regulated does not mean that they are Up regulated in absolute, but they have an up-regulation in HDAC4 KO
+that is not observed in Cas9, but Cas9 can have initially an higher absolute expression of that genes
+This is why if then we plot this genes in a heatmap we don't see that they are in absolute up-regulated
+
+
+
+
+
+
+

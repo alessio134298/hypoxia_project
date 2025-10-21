@@ -1,0 +1,194 @@
+---
+Decoupler
+---
+
+```{r setup}
+suppressMessages({
+  library(tidyverse)
+  library(decoupleR)
+  library(ggrepel)
+  library(ComplexHeatmap)
+})
+
+{
+  ah <- AnnotationHub(localHub = FALSE)
+  query(ah , c("Homo sapiens", "Ensembl","EnsDb", "110"))
+  edb <- ah[["AH113665"]]
+  gns <- as.data.frame(genes(edb, return.type = "DataFrame")) 
+  rm(edb, ah)
+  gns_geneidversion_symbol_entrezid <- gns %>% 
+    dplyr::select(gene_id_version, symbol, entrezid)
+  rm(gns)
+  
+  coldata <- read_csv(file.path(pathx,'sheets/samplesheet_salmon.csv'))
+
+}
+```
+
+#retrieving path from Progeny
+```{r}
+net <- get_progeny(organism = 'human', top = 500)
+```
+
+```{r}
+gns_geneidversion_symbol <- gns_geneidversion_symbol_entrezid %>% 
+  dplyr::select(gene_id_version, symbol)
+
+#carico Conte e trasformo in un dataframe utilizzabile per plottare
+Norm_counts <- read_csv('../tables/Norm_counts.csv') %>% 
+  left_join(gns_geneidversion_symbol, by = "gene_id_version") %>% 
+  dplyr::select(-gene_id_version) %>% 
+  dplyr::filter(!is.na(symbol) & !duplicated(symbol)) %>% 
+  column_to_rownames("symbol")
+```
+
+#Faccio una matrice con la media dei replicati
+```{r}
+Reps_coldata <- coldata %>% 
+  dplyr::mutate(clone_time_rep = str_c(clone_group, time, sep = '_')) 
+
+Norm_counts_meanrep <- Norm_counts %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "symbol") %>% 
+  pivot_longer(cols = starts_with("R"), names_to = "names", values_to = "counts") %>% 
+  left_join(Reps_coldata, by = "names") %>% 
+  dplyr::select(symbol, clone_time_rep, counts) %>% 
+  group_by(clone_time_rep, symbol) %>% 
+  summarize(mean = mean(counts)) %>% 
+  pivot_wider(names_from = clone_time_rep, values_from = mean) %>% 
+  column_to_rownames("symbol") %>% 
+  as.matrix()
+```
+
+#Activity inference with Multivariate linear model
+```{r}
+sample_acts_merged_reps <- run_mlm(mat=Norm_counts_meanrep, network = net, .source='source', .target='target',
+                  .mor='weight', minsize = 5)
+```
+
+#plot Heatmap
+```{r}
+sample_acts_mat_merged_reps <- sample_acts_merged_reps %>%
+  pivot_wider(id_cols = 'condition', names_from = 'source',
+              values_from = 'score') %>%
+  column_to_rownames('condition') %>%
+  as.matrix()
+
+# Scale per sample
+sample_acts_mat_merged_reps <- scale(sample_acts_mat_merged_reps)
+
+row_order <- c("CAS9_cl.125_ctrl_0", "CAS9_cl.26_ctrl_0",
+               "CAS9_cl.125_ctrl_6", "CAS9_cl.26_ctrl_6",
+               "CAS9_cl.125_ctrl_24", "CAS9_cl.26_ctrl_24",
+               "CAS9_cl.125_ctrl_48", "CAS9_cl.26_ctrl_48",
+               "HDAC4_KO_cl.125_0", "HDAC4_KO_cl.26_0",
+               "HDAC4_KO_cl.125_6", "HDAC4_KO_cl.26_6",
+               "HDAC4_KO_cl.125_24", "HDAC4_KO_cl.26_24",
+               "HDAC4_KO_cl.125_48", "HDAC4_KO_cl.26_48")
+
+colors <- rev(RColorBrewer::brewer.pal(n = 11, name = "RdBu"))
+colors.use <- grDevices::colorRampPalette(colors = colors)(100)
+my_breaks <- c(seq(-2, 0, length.out = ceiling(100 / 2)),
+               seq(0.05,2, length.out = floor(100 / 2)))
+
+png(file = "../plot/decoupleR_heatmap_mlm.png", height = 15, width = 18, res = 300, units = 'cm')
+Heatmap(sample_acts_mat_merged_reps[row_order,],
+        col = circlize::colorRamp2(my_breaks , colors.use),
+        name = "Z score",
+        rect_gp = gpar(col = "white", lwd = 0.5),
+        cluster_rows = F,
+        cluster_columns = T,
+        column_title = "decoupleR pathways activity"
+        )
+dev.off()
+
+# only hypoxia and VEGF
+png(file = "../plot/decoupleR_heatmap_mlm_only_hpx.png", height = 15, width = 12, res = 300, units = 'cm')
+Heatmap(sample_acts_mat_merged_reps[row_order, c('Hypoxia', 'VEGF')],
+        col = circlize::colorRamp2(my_breaks , colors.use),
+        name = "Z score",
+        rect_gp = gpar(col = "white", lwd = 0.5),
+        cluster_rows = F,
+        cluster_columns = T,
+        column_title = "decoupleR pathways activity"
+        )
+dev.off()
+```
+
+
+
+########################################
+#Transcription factor activity inference
+########################################
+
+#Carico DESeq2 results e le conte normalizzate
+```{r}
+files <- list.files('../DEGs_tabs', full.names = T)
+files <- files[str_detect(files, 'interaction', negate = T)]
+
+DESeq2_results_Vs_normoxia_sep_clones <- list()
+for (i in files) {
+  name = basename(i)
+  df <- read_delim(i)
+  
+  DESeq2_results_Vs_normoxia_sep_clones[[i]] <- df
+}
+```
+
+#CollecTRI network
+```{r}
+net <- get_collectri(organism='human', split_complexes=FALSE)
+```
+
+
+```{r}
+sample_acts <- run_ulm(mat = Norm_counts_meanrep, network = net, .source ='source', .target = 'target', .mor = 'mor', minsize = 5)
+```
+
+#Visualization
+```{r}
+n_tfs <- 10
+
+# Transform to wide matrix
+sample_acts_mat <- sample_acts %>%
+  pivot_wider(id_cols = 'condition', names_from = 'source',
+              values_from = 'score') %>%
+  column_to_rownames('condition') %>%
+  as.matrix()
+
+# Get top tfs with more variable means across clusters
+tfs <- sample_acts %>%
+  group_by(source) %>%
+  summarise(std = sd(score)) %>%
+  arrange(-abs(std)) %>%
+  head(n_tfs) %>%
+  pull(source)
+
+HIFs <- c("HIF1A", "EPAS1", "HIF3A")
+
+sample_acts_mat <- sample_acts_mat[,HIFs]
+
+
+
+# Scale per sample
+sample_acts_mat <- scale(sample_acts_mat)
+
+row_order <- c("CAS9_cl.125_ctrl_0", "CAS9_cl.26_ctrl_0",
+               "CAS9_cl.125_ctrl_6", "CAS9_cl.26_ctrl_6",
+               "CAS9_cl.125_ctrl_24", "CAS9_cl.26_ctrl_24",
+               "CAS9_cl.125_ctrl_48", "CAS9_cl.26_ctrl_48",
+               "HDAC4_KO_cl.125_0", "HDAC4_KO_cl.26_0",
+               "HDAC4_KO_cl.125_6", "HDAC4_KO_cl.26_6",
+               "HDAC4_KO_cl.125_24", "HDAC4_KO_cl.26_24",
+               "HDAC4_KO_cl.125_48", "HDAC4_KO_cl.26_48")
+
+
+#pdf(file = "plot/decoupleR_heatmap_mlm.pdf", height = 6, width = 8)
+Heatmap(sample_acts_mat[row_order, ],
+        col = circlize::colorRamp2(c(-3, 0, 3), c("darkblue", "white", "darkred")),
+        name = "Z score",
+        rect_gp = gpar(col = "white", lwd = 0.5),
+        cluster_rows = F,
+        column_title = "decoupleR pathways activity"
+        )
+```

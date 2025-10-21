@@ -1,0 +1,496 @@
+
+```{r setup}
+library(tidyverse)
+library(ComplexHeatmap)
+library(colorRamp2)
+```
+
+# Load the VSD counts and the DESeq results with separated clones
+```{r}
+VSD <- read_csv("Tabs/DESeq2_VSD_symb.csv") %>% 
+  dplyr::select(gene_id_version, symbol, R1CN, R2CN, R3CN, R4CN, RK125AN, RK125BN, RK26AN, RK26BN)
+
+core_genes_list <- list(
+  Genes_Up_shared_DBR_promoter = read_lines("Genes_Up_shared_DBR_promoter.txt"),
+  Genes_Up_H3K27ac_DBR_promoter = read_lines("Genes_Up_H3K27ac_DBR_promoter.txt"),
+  Genes_Up_H2BK120ac_DBR_promoter = read_lines("Genes_Up_H2BK120ac_DBR_promoter.txt"),
+  Genes_Up_shared_all_TEs_HiC = read_lines("Genes_Up_shared_TEs_HiC.txt"),
+  Genes_Up_shared_all_SEs_HiC = read_lines("Genes_Up_shared_SEs_HiC.txt")  
+)
+
+
+id_symbol = VSD %>% dplyr::select(gene_id_version, symbol)
+
+# H4KO_125_vs_cas9_0h <- read_csv("Tabs/H4KO_125_vs_Cas9_0h.csv") %>% 
+#   right_join(id_symbol, by = "gene_id_version")
+#   
+# H4KO_26_vs_cas9_0h <- read_csv("Tabs/H4KO_26_vs_Cas9_0h.csv") %>% 
+#   right_join(id_symbol, by = "gene_id_version")
+```
+
+```{r}
+# filter the VSD on the core genes
+
+filter_df <- function(df, genes) {
+  
+  df_f <- df %>% 
+    dplyr::filter(symbol %in% genes) %>% 
+    dplyr::select(-gene_id_version) %>% 
+    column_to_rownames("symbol")
+  
+  return(df_f)
+}
+
+# Create VSD dataframe filtered on the gene lists
+VSD_groups_list <- list()
+
+for (i in names(core_genes_list)) {
+  
+  name = paste0("VSD_",i) %>% str_remove("Genes_")
+
+  VSD_groups_list[[name]] <- filter_df(VSD, core_genes_list[[i]])
+}
+```
+
+# Heatmap of VSD count on the subgroups
+```{r}
+library(ComplexHeatmap)
+library(colorRamp2)
+
+# Heatmap with VSD
+
+Core_Genes_Hmap_VSD_promoter <- Heatmap(matrix = VSD_groups_list$VSD_Up_shared_DBR_promoter,
+        cluster_columns = F,
+        name = "VSD",
+        col = colorRamp2(colors = c("white", "red"), breaks = c(
+          min(VSD_groups_list$VSD_Up_shared_DBR_promoter),
+          max(VSD_groups_list$VSD_Up_shared_DBR_promoter)),
+          ),
+         rect_gp = gpar(col = "black", lwd = 0.5)
+)
+
+Core_Genes_Hmap_VSD_TEs_HiC <- Heatmap(matrix = VSD_groups_list$VSD_Up_shared_all_TEs_HiC,
+        cluster_columns = F,
+        name = "VSD",
+        col = colorRamp2(colors = c("white", "red"), breaks = c(
+          min(VSD_groups_list$VSD_Up_shared_all_TEs_HiC),
+          max(VSD_groups_list$VSD_Up_shared_all_TEs_HiC)),
+          ),
+          rect_gp = gpar(col = "black", lwd = 0.5)
+
+)
+
+Core_Genes_Hmap_VSD_SEs_HiC <- Heatmap(matrix = VSD_groups_list$VSD_Up_shared_all_SEs_HiC,
+        cluster_columns = F,
+        name = "VSD",
+        col = colorRamp2(colors = c("white", "red"), breaks = c(
+          min(VSD_groups_list$VSD_Up_shared_all_SEs_HiC),
+          max(VSD_groups_list$VSD_Up_shared_all_SEs_HiC)),
+          ),
+         rect_gp = gpar(col = "black", lwd = 0.5)
+
+)
+
+
+# pdf(file = "Plots/Heatmap_66_core_genes_VSD.pdf", height = 10, width = 8)
+# Core_Genes_Hmap_VSD_promoter
+# dev.off()
+
+# #Heatmap with L2FC
+# H4KO_125_vs_cas9_0h_68_genes <- H4KO_125_vs_cas9_0h %>% 
+#   dplyr::filter(symbol %in% Genes_Up_shared_All) %>% 
+#   dplyr::select(symbol, log2FoldChange) %>% 
+#   dplyr::rename(H4KO_125 = log2FoldChange)
+# 
+# H4KO_26_vs_cas9_0h_68_genes <- H4KO_26_vs_cas9_0h %>% 
+#   dplyr::filter(symbol %in% Genes_Up_shared_All) %>% 
+#   dplyr::select(symbol, log2FoldChange) %>% 
+#   dplyr::rename(H4KO_26 = log2FoldChange)
+# 
+# L2FC_68_genes <- full_join(H4KO_125_vs_cas9_0h_68_genes,
+#                            H4KO_26_vs_cas9_0h_68_genes, 
+#                            by = "symbol") %>% 
+#   column_to_rownames("symbol")
+# 
+# L2FC_68_genes[is.na.data.frame(L2FC_68_genes)] <- 0
+# 
+# Core_Genes_Hmap_L2FC <- Heatmap(matrix = L2FC_68_genes,
+#         cluster_columns = F,
+#         name = "L2FC",
+#         col = colorRamp2(colors = c("blue","white", "red"), breaks = c(
+#           min(L2FC_68_genes),
+#           0,
+#           max(L2FC_68_genes)
+#           )
+#           )
+# )
+# 
+# pdf(file = "Plots/Heatmap_68_core_genes_L2FC.pdf", height = 10, width = 8)
+# Core_Genes_Hmap_L2FC
+# dev.off()
+
+Core_Genes_Hmap_VSD_promoter
+Core_Genes_Hmap_VSD_TEs_HiC
+Core_Genes_Hmap_VSD_SEs_HiC
+# Core_Genes_Hmap_L2FC
+```
+
+# Heatmap with signal of Acetylation
+```{r}
+Table_Signal_Bw_TSS <- read_delim("Bed/TSS_bw_signal.bed") %>% 
+  dplyr::mutate(symbol = str_extract(id, "(?<=gene_name )[^;]+"))
+```
+
+# Load HDAC4 peaks and intersect with promoters, so adding the infos
+# to the TSS file with Bigwig about the presence oh HDAC4
+```{r}
+HDAC4_peaks <- readPeakFile("Bed/GSM3882325_HDAC4_DMSO_SKUT_peaks.narrowPeak")
+
+# Convert to Granges and create a new column with the counts of overlaps with HDAC4
+Table_Signal_Bw_TSS_HDAC4 <- Table_Signal_Bw_TSS %>% 
+  makeGRangesFromDataFrame(keep.extra.columns = T,
+                           seqnames.field = "chr",
+                           start.field = "start",
+                           end.field = "end")
+```
+
+
+# Which of these core genes has a loop in which the opposite anchora has an overlap with HDAC4
+# Can suggest a potential regulatory effect of HDAC4 also if there is no upregulated enhancer
+# I don't know if this makes total sense but this is what the prof want
+```{r}
+# Load the chromatin loop file
+chromatin_loop <- read_tsv("chromatin_loops.bedpe", comment = "#", col_names = F)
+chromatin_loop <- chromatin_loop[,1:6]
+
+# I create 2 granges one on the anchor1 and one on the anchor2
+anchor1 <- makeGRangesFromDataFrame(chromatin_loop,
+                                    keep.extra.columns = T,
+                                    seqnames.field = "X1",
+                                    start.field = "X2",
+                                    end.field = "X3")
+
+names(mcols(anchor1)) <- c("1", "2", "3")
+
+anchor2 <- makeGRangesFromDataFrame(chromatin_loop,
+                                    keep.extra.columns = T,
+                                    seqnames.field = "X4",
+                                    start.field = "X5",
+                                    end.field = "X6")
+
+names(mcols(anchor2)) <- c("1", "2", "3")
+
+
+# recrate the granges from the TSS table subsetted with the core genes
+Table_Signal_Bw_TSS_HDAC4_core <- Table_Signal_Bw_TSS %>% 
+  dplyr::filter(symbol %in% core_genes_list$Genes_Up_shared_DBR_promoter) %>% 
+  makeGRangesFromDataFrame(keep.extra.columns = T,
+                           seqnames.field = "chr",
+                           start.field = "start",
+                           end.field = "end")
+
+
+###############
+# This is hacky
+###############
+
+# create the granges with the rigth info inside
+hits_1 <- findOverlaps(anchor1, Table_Signal_Bw_TSS_HDAC4_core)
+
+# Extract query and subject indices
+query_idx <- queryHits(hits_1)
+subject_idx <- subjectHits(hits_1)
+
+# Build new GRanges based on query ranges
+gr_out_1 <- anchor1[query_idx]
+
+# Add subject ranges as a metadata column
+mcols(gr_out_1)$symbol <- Table_Signal_Bw_TSS_HDAC4_core$symbol[subject_idx]
+
+
+# create the granges with the rigth info inside
+hits_2 <- findOverlaps(anchor2, Table_Signal_Bw_TSS_HDAC4_core)
+
+# Extract query and subject indices
+query_idx <- queryHits(hits_2)
+subject_idx <- subjectHits(hits_2)
+
+# Build new GRanges based on query ranges
+gr_out_2 <- anchor2[query_idx]
+
+# Add subject ranges as a metadata column
+mcols(gr_out_2)$symbol <- Table_Signal_Bw_TSS_HDAC4_core$symbol[subject_idx]
+
+
+######################
+# bind the two objects
+
+# the coordinates in the metadata is the anchor that we want to see if it has HDAC4
+
+Gr_out_merged <- c(gr_out_1, gr_out_2) %>% 
+  as.data.frame()
+
+genes_with_regulatory_anchor <- Gr_out_merged %>% 
+  dplyr::select(!c(seqnames, start, end)) %>% 
+  makeGRangesFromDataFrame(seqnames.field = "1", start.field = "2", end.field = "3", keep.extra.columns = T)
+
+HDAC4_olaps_on_anchor <- tibble(
+  symbol = genes_with_regulatory_anchor$symbol,
+  HDAC4_on_distal_element = countOverlaps(genes_with_regulatory_anchor, HDAC4_peaks)
+  ) %>% 
+  group_by(symbol) %>% 
+  summarize(HDAC4_on_distal_element = sum(HDAC4_on_distal_element))
+
+```
+
+# add the overlaps on the promoter with HDAC4
+```{r}
+Overlaps_HDAC4_TSS <- countOverlaps(Table_Signal_Bw_TSS_HDAC4, HDAC4_peaks)
+
+Table_Signal_Bw_TSS_HDAC4 <- Table_Signal_Bw_TSS_HDAC4 %>% 
+  as.data.frame() %>% 
+  dplyr::mutate(HDAC4_counts = Overlaps_HDAC4_TSS) %>% 
+  left_join(HDAC4_olaps_on_anchor, by = "symbol") %>% 
+  dplyr::mutate(HDAC4_on_distal_element = ifelse(is.na(HDAC4_on_distal_element), 0, HDAC4_on_distal_element))
+```
+
+
+# Add also MEF2D signal
+# Copied and pasted everything for HDAC4 and subs MEF2D
+```{r}
+MEF2D_peaks <- readPeakFile("Bed/GSM3882327_MEF2D_DMSO_SKUT_peaks.narrowPeak")
+
+# Load the chromatin loop file
+chromatin_loop <- read_tsv("chromatin_loops.bedpe", comment = "#", col_names = F)
+chromatin_loop <- chromatin_loop[,1:6]
+
+# I create 2 granges one on the anchor1 and one on the anchor2
+anchor1 <- makeGRangesFromDataFrame(chromatin_loop,
+                                    keep.extra.columns = T,
+                                    seqnames.field = "X1",
+                                    start.field = "X2",
+                                    end.field = "X3")
+
+names(mcols(anchor1)) <- c("1", "2", "3")
+
+anchor2 <- makeGRangesFromDataFrame(chromatin_loop,
+                                    keep.extra.columns = T,
+                                    seqnames.field = "X4",
+                                    start.field = "X5",
+                                    end.field = "X6")
+
+names(mcols(anchor2)) <- c("1", "2", "3")
+
+
+# recrate the granges from the TSS table subsetted with the core genes
+Table_Signal_Bw_TSS_MEF2D_core <- Table_Signal_Bw_TSS %>% 
+  dplyr::filter(symbol %in% core_genes_list$Genes_Up_shared_DBR_promoter) %>% 
+  makeGRangesFromDataFrame(keep.extra.columns = T,
+                           seqnames.field = "chr",
+                           start.field = "start",
+                           end.field = "end")
+
+
+###############
+# This is hacky
+###############
+
+# create the granges with the rigth info inside
+hits_1 <- findOverlaps(anchor1, Table_Signal_Bw_TSS_MEF2D_core)
+
+# Extract query and subject indices
+query_idx <- queryHits(hits_1)
+subject_idx <- subjectHits(hits_1)
+
+# Build new GRanges based on query ranges
+gr_out_1 <- anchor1[query_idx]
+
+# Add subject ranges as a metadata column
+mcols(gr_out_1)$symbol <- Table_Signal_Bw_TSS_MEF2D_core$symbol[subject_idx]
+
+
+# create the granges with the rigth info inside
+hits_2 <- findOverlaps(anchor2, Table_Signal_Bw_TSS_MEF2D_core)
+
+# Extract query and subject indices
+query_idx <- queryHits(hits_2)
+subject_idx <- subjectHits(hits_2)
+
+# Build new GRanges based on query ranges
+gr_out_2 <- anchor2[query_idx]
+
+# Add subject ranges as a metadata column
+mcols(gr_out_2)$symbol <- Table_Signal_Bw_TSS_MEF2D_core$symbol[subject_idx]
+
+
+######################
+# bind the two objects
+
+# the coordinates in the metadata is the anchor that we want to see if it has MEF2D
+
+Gr_out_merged <- c(gr_out_1, gr_out_2) %>% 
+  as.data.frame()
+
+genes_with_regulatory_anchor <- Gr_out_merged %>% 
+  dplyr::select(!c(seqnames, start, end)) %>% 
+  makeGRangesFromDataFrame(seqnames.field = "1", start.field = "2", end.field = "3", keep.extra.columns = T)
+
+MEF2D_olaps_on_anchor <- tibble(
+  symbol = genes_with_regulatory_anchor$symbol,
+  MEF2D_on_distal_element = countOverlaps(genes_with_regulatory_anchor, MEF2D_peaks)
+  ) %>% 
+  group_by(symbol) %>% 
+  summarize(MEF2D_on_distal_element = sum(MEF2D_on_distal_element))
+
+
+# Convert to Granges and create a new column with the counts of overlaps with MEF2D
+Table_Signal_Bw_TSS_MEF2D <- Table_Signal_Bw_TSS %>% 
+  makeGRangesFromDataFrame(keep.extra.columns = T,
+                           seqnames.field = "chr",
+                           start.field = "start",
+                           end.field = "end")
+
+Overlaps_MEF2D_TSS <- countOverlaps(Table_Signal_Bw_TSS_MEF2D, MEF2D_peaks)
+
+Table_Signal_Bw_TSS_MEF2D <- Table_Signal_Bw_TSS_MEF2D %>% 
+  as.data.frame() %>% 
+  dplyr::mutate(MEF2D_counts = Overlaps_MEF2D_TSS) %>% 
+  left_join(MEF2D_olaps_on_anchor, by = "symbol") %>% 
+  dplyr::mutate(MEF2D_on_distal_element = ifelse(is.na(MEF2D_on_distal_element), 0, MEF2D_on_distal_element))
+```
+
+# Combine HDAC4 and MEF2D dataframe
+```{r}
+MEF2D_presence_df <- Table_Signal_Bw_TSS_MEF2D %>% dplyr::select(MEF2D_counts, MEF2D_on_distal_element)
+
+HDAC4_MEF2D_acetylation_signal_df <- bind_cols(Table_Signal_Bw_TSS_HDAC4, MEF2D_presence_df)
+```
+
+
+# Create the dataframes for heatmap filtering on the gene lists
+```{r}
+filter_df <- function(df, genes) {
+  
+  df_f <- df %>% 
+    dplyr::filter(symbol %in% core_genes_list[[i]])  %>% 
+    dplyr::select(c(symbol, contains("RPKM"), HDAC4_counts, HDAC4_on_distal_element, MEF2D_counts, MEF2D_on_distal_element)) %>% 
+    column_to_rownames("symbol")
+  
+  return(df_f)
+}
+
+# Create Acetylation signal dataframe filtered on the gene lists
+Acetylation_signal_list <- list()
+
+for (i in names(core_genes_list)) {
+  
+  name = paste0("Acetylation_",i) %>% str_remove("Genes_")
+
+  Acetylation_signal_list[[name]] <- filter_df(HDAC4_MEF2D_acetylation_signal_df, core_genes_list[[i]])
+}
+```
+
+
+```{r}
+df_Chip <- Acetylation_signal_list$Acetylation_Up_shared_DBR_promoter
+df_Vsd <- VSD_groups_list$VSD_Up_shared_DBR_promoter
+
+Core_Genes_Hmap_VSD_promoter <- Heatmap(matrix = df_Vsd,
+        cluster_columns = F,
+        name = "VSD",
+        col = colorRamp2(colors = c("white", "red"), breaks = c(
+          min(df_Vsd),
+          max(df_Vsd)),
+          ),
+         rect_gp = gpar(col = "black", lwd = 0.5)
+)
+
+Acetylation_Hmap_Signal_promoter <- Heatmap(matrix = 
+        df_Chip[, -c(9,10,11,12)], #HDAC4 counts is the 9 col
+        cluster_columns = F,
+        name = "RPKM log2 ratio ChIP / Input",
+        col = colorRamp2(colors = c("green","white", "blue"), breaks = c(
+          min(df_Chip), medium = 0,
+          max(df_Chip))
+          ),
+        column_spl = c(rep("H3K27ac", 4), rep ("H2BK120ac", 4)),
+        rect_gp = gpar(col = "black", lwd = 0.5)
+        )
+
+HDAC4_mini_Hmap <- Heatmap(matrix = 
+        df_Chip[,9, drop = FALSE], #HDAC4 counts is the 9 col
+        cluster_columns = F,
+        name = "HDAC4 peaks",
+        col = colorRamp2(colors = c("white", "pink", "purple"), 
+                         breaks = c(0,1,2)),
+        heatmap_legend_param = list(
+              at = c(0, 1, 2)),
+         rect_gp = gpar(col = "black", lwd = 0.5)
+        )
+
+HDAC4_distal_mini_Hmap <- Heatmap(matrix = 
+        df_Chip[,10, drop = FALSE], #HDAC4 counts is the 9 col
+        cluster_columns = F,
+        name = "HDAC4 peaks on reg element",
+        col = colorRamp2(colors = c("white", "pink", "purple"), 
+                         breaks = c(0,1,2)),
+        heatmap_legend_param = list(
+              at = c(0, 1, 2)),
+         rect_gp = gpar(col = "black", lwd = 0.5)
+        )
+
+MEF2D_mini_Hmap <- Heatmap(matrix = 
+        df_Chip[,11, drop = FALSE], #HDAC4 counts is the 9 col
+        cluster_columns = F,
+        name = "MEF2D peaks",
+        col = colorRamp2(colors = c("white", "lightgreen", "darkgreen"), 
+                         breaks = c(0,1,2)),
+        heatmap_legend_param = list(
+              at = c(0, 1, 2)),
+         rect_gp = gpar(col = "black", lwd = 0.5)
+        )
+
+MEF2D_distal_mini_Hmap <- Heatmap(matrix = 
+        df_Chip[,12, drop = FALSE], #HDAC4 counts is the 9 col
+        cluster_columns = F,
+        name = "MEF2D peaks on reg element",
+        col = colorRamp2(colors = c("white", "lightgreen", "darkgreen"), 
+                         breaks = c(0,1,2)),
+        heatmap_legend_param = list(
+              at = c(0, 1, 2)),
+         rect_gp = gpar(col = "black", lwd = 0.5)
+        )
+
+
+# Combined Heatmap
+Hmap_promoter <- Core_Genes_Hmap_VSD_promoter + 
+  Acetylation_Hmap_Signal_promoter + 
+  HDAC4_mini_Hmap +
+  HDAC4_distal_mini_Hmap +
+  MEF2D_mini_Hmap +
+  MEF2D_distal_mini_Hmap
+
+pdf(file = "Plots/Heatmap_Promoter.pdf", height = 12, width = 8)
+Hmap_promoter
+dev.off()
+
+Hmap_promoter
+```
+
+# NFIB HDAC4 promoter motifs
+```{r}
+library(GenomicRanges)
+
+PMID_promoter <- Table_Signal_Bw_TSS %>% dplyr::filter(symbol == "NFIB") %>% makeGRangesFromDataFrame()
+
+HDAC4_peak_on_PMID <- subsetByOverlaps(HDAC4_peaks, PMID_promoter)
+
+# convert to bed
+HDAC4_peak_on_PMID %>% as.data.frame() %>% dplyr::select(seqnames, start, end) %>% write_delim('Bed/HDAC4_on_PMID_promoter.bed', col_names = F, delim='\t')
+```
+
+```{bash, eval =F}
+bedtools getfasta -fi ../../Downloads/GRCh38.primary_assembly.genome.fa -bed Bed/HDAC4_on_PMID_promoter.bed -fo HDAC4_on_PMID_promoter.fa
+```
+
+
