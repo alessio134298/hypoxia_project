@@ -1,0 +1,1 @@
+for sample in /media/alessio/Data/hypoxia/ChIPseq/DiffBind_bed_files/entires/*; do samplename=$(basename "$sample" | awk -F "." '{print $1}'); annotatePeaks.pl "$sample" /media/alessio/Data/genome110/gencode/GRCh38.primary_assembly.genome.fa -m /home/alessio/tools/Homer/motifs/hif1a.motif -mbed DiffBind_bedfiles_with_HIF1a_bedfiles/HIF1a_motif_"$samplename".bed; done

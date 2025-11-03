@@ -6,7 +6,56 @@ library(ggpubr)
 library(ChIPpeakAnno)
 library(org.Hs.eg.db)
 library(scales)
+
+# function to create a barplot
+Makebarplot <- function(df, vector_of_samples, title, colors) {
+  df <- df %>% 
+    dplyr::filter(Sample %in% vector_of_samples)
+  
+  df %>% 
+    ggplot(aes(x = Sample, fill = Annotation)) +
+    geom_bar(position = "fill", stat = "count", color = "black") +
+    scale_y_continuous(name = "Percentage(%)", labels = label_percent()) +
+    scale_fill_viridis_d(option = colors) +
+    theme_bw() +
+    theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1,   # right-aligned
+      vjust = 1    # vertical tweak
+    )
+  )  +
+    labs(title = title,
+         x = NULL,
+         fill = "Regions")
+}
+
+#calcolo lunghezza dei picchi e score
+Extract.summary.df <- function(list) {
+  
+  #inizializzo
+  df.total <- tibble()
+  
+  for (i in names(list)) {
+    df <- as.data.frame(list[[i]]) %>% 
+      dplyr::mutate(Sample = i)
+    df.total = bind_rows(df.total, df)
+    
+  }
+  
+  df.summary <- df.total %>%
+    group_by(Sample) %>% 
+    summarise(Peaks = n(),
+              Avg.width = round(mean(width), 0),
+              Mdn.width = round(median(width), 0),
+              Avg.Signal = mean(Signal)) %>% 
+    arrange(Sample)
+    
+  
+  return(df.summary)
+}
 ```
+
 
 #carico i picchi (narrowPeak) di H3K27ac e H2BK120ac
 ```{r}
@@ -95,25 +144,6 @@ for (i in names(Annotated.Tot.narrowPeak.df.simplified)) {
 }
 ```
 
-#plot regioni genomiche
-#funzione per creare barplot
-```{r}
-Makebarplot <- function(df, vector_of_samples, title, colors) {
-  df <- df %>% 
-    dplyr::filter(Sample %in% vector_of_samples)
-  
-  df %>% 
-    ggplot(aes(x = Sample, fill = Annotation)) +
-    geom_bar(position = "fill", stat = "count", color = "black") +
-    scale_y_continuous(name = "Percentage(%)", labels = label_percent()) +
-    scale_fill_viridis_d(option = colors) +
-    theme_bw() +
-    labs(title = title,
-         x = NULL,
-         fill = "Regions")
-}
-```
-
 ```{r}
 order = c("Distal Intergenic", "TES", "3' UTR", "Exon", "Intron", "5' UTR", "Promoter-TSS")
 Annotated.narrowPeak.dataframe$Annotation <- factor(Annotated.narrowPeak.dataframe$Annotation, levels = order)
@@ -132,33 +162,6 @@ ggsave(Normoxia.H3K27ac.PLot, filename = "/media/alessio/Data/hypoxia/ChIPseq/Fi
 ggsave(Normoxia.H2BK120ac.PLot, filename = "/media/alessio/Data/hypoxia/ChIPseq/Figure_paper/H2BK120ac/H2BK120ac_Normoxia_peaks_positions.png", dpi = 300, height = 8, width = 6)
 ```
 
-
-#calcolo lunghezza dei picchi e score
-```{r setup}
-Extract.summary.df <- function(list) {
-  
-  #inizializzo
-  df.total <- tibble()
-  
-  for (i in names(list)) {
-    df <- as.data.frame(list[[i]]) %>% 
-      dplyr::mutate(Sample = i)
-    df.total = bind_rows(df.total, df)
-    
-  }
-  
-  df.summary <- df.total %>%
-    group_by(Sample) %>% 
-    summarise(Peaks = n(),
-              Avg.width = round(mean(width), 0),
-              Mdn.width = round(median(width), 0),
-              Avg.Signal = mean(Signal)) %>% 
-    arrange(Sample)
-    
-  
-  return(df.summary)
-}
-```
 
 ```{r}
 DF.H3K27ac <- Extract.summary.df(Peaks.H3K27ac)
@@ -326,14 +329,20 @@ dev.off()
 intersected.peaks.normoxia <- list(
   Cas9.AllPeaks.H3K27ac = Peaks.IDR.H3K27ac$Cas9_normoxia,
   Cas9.AllPeaks.H2BK120ac = Peaks.IDR.H2BK120ac$Cas9_normoxia,
-  Cas9.CommonPeaks.H3K27ac.on.H2BK120ac = subsetByOverlaps(Peaks.IDR.H3K27ac$Cas9_normoxia, Peaks.IDR.H2BK120ac$Cas9_normoxia),
-  Cas9.CommonPeaks.H2BK120ac.on.H3K27ac = subsetByOverlaps(Peaks.IDR.H2BK120ac$Cas9_normoxia, Peaks.IDR.H3K27ac$Cas9_normoxia),
+  Cas9.CommonPeaks = GenomicRanges::reduce(
+    c(subsetByOverlaps(Peaks.IDR.H3K27ac$Cas9_normoxia, Peaks.IDR.H2BK120ac$Cas9_normoxia),
+      subsetByOverlaps(Peaks.IDR.H2BK120ac$Cas9_normoxia, Peaks.IDR.H3K27ac$Cas9_normoxia)
+      )
+    ),
   Cas9.ExclusivePeaks.H3K27ac = subsetByOverlaps(Peaks.IDR.H3K27ac$Cas9_normoxia, Peaks.IDR.H2BK120ac$Cas9_normoxia, invert = T),
   Cas9.ExclusivePeaks.H2BK120ac = subsetByOverlaps(Peaks.IDR.H2BK120ac$Cas9_normoxia, Peaks.IDR.H3K27ac$Cas9_normoxia, invert = T),
   H4KO.AllPeaks.H3K27ac = Peaks.IDR.H3K27ac$H4KO_normoxia,
   H4KO.AllPeaks.H2BK120ac = Peaks.IDR.H2BK120ac$H4KO_normoxia,
-  H4KO.CommonPeaks.H3K27ac.on.H2BK120ac = subsetByOverlaps(Peaks.IDR.H3K27ac$H4KO_normoxia, Peaks.IDR.H2BK120ac$H4KO_normoxia),
-  H4KO.CommonPeaks.H2BK120ac.on.H3K27ac = subsetByOverlaps(Peaks.IDR.H2BK120ac$H4KO_normoxia, Peaks.IDR.H3K27ac$H4KO_normoxia),
+  H4KO.CommonPeaks = GenomicRanges::reduce(
+    c(subsetByOverlaps(Peaks.IDR.H3K27ac$H4KO_normoxia, Peaks.IDR.H2BK120ac$H4KO_normoxia),
+      subsetByOverlaps(Peaks.IDR.H2BK120ac$H4KO_normoxia, Peaks.IDR.H3K27ac$H4KO_normoxia)
+      )
+    ),
   H4KO.ExclusivePeaks.H3K27ac = subsetByOverlaps(Peaks.IDR.H3K27ac$H4KO_normoxia, Peaks.IDR.H2BK120ac$H4KO_normoxia, invert = T),
   H4KO.ExclusivePeaks.H2BK120ac = subsetByOverlaps(Peaks.IDR.H2BK120ac$H4KO_normoxia, Peaks.IDR.H3K27ac$H4KO_normoxia, invert = T)
 )
@@ -416,17 +425,21 @@ Annotated.intersected.peaks.normoxia.dataframe$Annotation <- factor(Annotated.in
 
 interest.samples.H3K27ac = c("Cas9.ExclusivePeaks.H3K27ac", "H4KO.ExclusivePeaks.H3K27ac")
 interest.samples.H2BK120ac = c("Cas9.ExclusivePeaks.H2BK120ac", "H4KO.ExclusivePeaks.H2BK120ac")
+common.peaks <- c("Cas9.CommonPeaks", "H4KO.CommonPeaks")
 
 Intersections.PLot.H3K27ac <- Makebarplot(Annotated.intersected.peaks.normoxia.dataframe, interest.samples.H3K27ac, NULL, "A")
 Intersections.PLot.H2BK120ac <- Makebarplot(Annotated.intersected.peaks.normoxia.dataframe, interest.samples.H2BK120ac, NULL, "G")
+Intersections.PLot.commonpeaks <- Makebarplot(Annotated.intersected.peaks.normoxia.dataframe, common.peaks, NULL, "C") + 
+  scale_fill_brewer(palette = 'Greys', direction =  -1)
 
-Intersections.PLot <- Intersections.PLot.H3K27ac  | Intersections.PLot.H2BK120ac
+
+Intersections.PLot <- Intersections.PLot.H3K27ac  | Intersections.PLot.H2BK120ac | Intersections.PLot.commonpeaks
 Intersections.PLot
 ```
 
 #savlo il plot
 ```{r}
-ggsave(Intersections.PLot, file = "plot/Annobar_intersected_peaks_exclusive_normoxia.png", height = 8, width = 9, dpi = 300)
+ggsave(Intersections.PLot, file = "plot/Annobar_intersected_peaks_exclusive_normoxia.pdf", height = 8, width = 12, dpi = 300)
 ```
 
 

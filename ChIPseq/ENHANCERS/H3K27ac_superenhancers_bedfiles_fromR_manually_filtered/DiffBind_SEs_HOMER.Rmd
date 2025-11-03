@@ -1,0 +1,174 @@
+```{r setup, echo = F}
+library(tidyverse)
+library(DiffBind)
+library(ChIPseeker)
+```
+
+
+#H3K27ac
+
+#carico samplesheet e lo modifico inserendo i bed files dei super enhancers
+```{r}
+coldata.SEs.H3K27ac = read.csv("/media/alessio/Data/hypoxia/ChIPseq/experiment.csv") |> 
+  dplyr::filter(Condition == "H3K27AC" & PeakCaller == "HOMER") |> 
+  dplyr::mutate(Peaks = paste0("/media/alessio/Data/hypoxia/ChIPseq/Homer_anno/H3K27ac_superenhancers_bedfiles_fromR_manually_filtered/",SampleID,".bed")) |> 
+  dplyr::mutate(PeakCaller = "bed")
+```
+
+#Counts
+```{r}
+dba.SEs.H3K27ac <- dba(sampleSheet = coldata.SEs.H3K27ac, scoreCol = 5)
+
+plot(dba.SEs.H3K27ac)
+
+dba.counts.SEs.H3K27ac <- dba.count(dba.SEs.H3K27ac, bUseSummarizeOverlaps = TRUE, bParallel = FALSE)
+```
+
+#normalizzazione
+```{r}
+dba.normalized.SEs.H3K27ac <- dba.normalize(dba.counts.SEs.H3K27ac, normalize = "RLE", library = DBA_LIBSIZE_PEAKREADS)
+
+dba.plotPCA(dba.normalized.SEs.H3K27ac, color = DBA_TREATMENT, label=DBA_ID)
+
+plot(dba.normalized.SEs.H3K27ac)
+```
+
+#Analisi differenziale H4KO vs CAS9
+```{r}
+#setting del contrast
+Contrasts.SEs.H3K27ac <- list(Normoxia_H4KO_vs_CAS9 = (Normoxia_H4KO_vs_CAS9 <- dba.contrast(dba.normalized.SEs.H3K27ac,
+                                                                                  design = ~ Factor, contrast = c("Factor", "H4KO_0h", "CAS9_0h"))),
+                  H6_H4KO_vs_CAS9 = (H6_H4KO_vs_CAS9 <- dba.contrast(dba.normalized.SEs.H3K27ac,
+                                                                     design = ~ Factor, contrast = c("Factor", "H4KO_6h", "CAS9_6h"))),
+                  H24_H4KO_vs_CAS9 = (H24_H4KO_vs_CAS9 <- dba.contrast(dba.normalized.SEs.H3K27ac,
+                                                                       design = ~ Factor, contrast = c("Factor", "H4KO_24h", "CAS9_24h")))
+ 
+                                                      )
+#calcolo dei picchi differenziali
+Differential.binding.SEs.H3K27ac <- lapply(Contrasts.SEs.H3K27ac, function(analyze) {
+  analyzed <- dba.analyze(analyze)
+  return(analyzed)
+})
+
+for (i in Differential.binding.SEs.H3K27ac) {
+  show <- dba.show(i, bContrasts=TRUE)
+  print(show)
+  rm(i, show)
+}
+```
+
+#report
+```{r}
+#report di tutti i picchi 
+Report.Differential.binding.SEs.H3K27ac <- lapply(Differential.binding.SEs.H3K27ac, function(analyze) {
+  report <- dba.report(analyze, th = 1)
+  return(report)
+})
+```
+
+#Annotazione
+```{r}
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene::TxDb.Hsapiens.UCSC.hg38.knownGene
+
+Report.Differential.binding.SEs.H3K27ac.Annotated.df <- lapply(Report.Differential.binding.SEs.H3K27ac, function(df) {
+  Anno <- as.data.frame(annotatePeak(df, tssRegion = c(-3000, 3000),
+                          columns = c("ENTREZID", "ENSEMBL", "SYMBOL", "GENENAME"),
+                          annoDb="org.Hs.eg.db",
+                          TxDb = txdb))
+})
+```
+
+#check del pvalue
+```{r}
+for (i in names(Report.Differential.binding.SEs.H3K27ac.Annotated.df)) {
+pvals <- Report.Differential.binding.SEs.H3K27ac.Annotated.df[[i]]$p.value
+histo <- hist(pvals,
+    breaks = 100,
+    main = i
+    )
+print(histo)
+}
+```
+
+#salvo in excel
+```{r}
+openxlsx::write.xlsx(Report.Differential.binding.SEs.H3K27ac.Annotated.df, file = "/media/alessio/Data/hypoxia/ChIPseq/tables/H3K27ac_tables/Superenhancers_DiffBind_results/SEs.H3K27ac.H4KOvsCAS9.xlsx")
+```
+
+
+#Analisi differenziale tempi di ipossia
+```{r}
+Contrasts.SEs.H3K27ac.hypoxia.times <- list(
+  CAS9_6h = (CAS9_6h <- dba.contrast(dba.normalized.SEs.H3K27ac, design = ~ Factor, contrast = c("Factor", "CAS9_6h", "CAS9_0h"))),
+  CAS9_24h = (CAS9_24h <- dba.contrast(dba.normalized.SEs.H3K27ac, design = ~ Factor, contrast = c("Factor", "CAS9_24h", "CAS9_0h"))),
+  H4KO_6h = (H4KO_6h <- dba.contrast(dba.normalized.SEs.H3K27ac, design = ~ Factor, contrast = c("Factor", "H4KO_6h", "H4KO_0h"))),
+  H4KO_24h = (H4KO_24h <- dba.contrast(dba.normalized.SEs.H3K27ac, design = ~ Factor, contrast = c("Factor", "H4KO_24h", "H4KO_0h")))
+ )
+
+Differential.binding.SEs.H3K27ac.hypoxia.times <- lapply(Contrasts.SEs.H3K27ac.hypoxia.times, function(analyze) {
+  analyzed <- dba.analyze(analyze)
+  return(analyzed)
+})
+
+for (i in Differential.binding.SEs.H3K27ac.hypoxia.times) {
+  show <- dba.show(i, bContrasts=TRUE)
+  print(show)
+  rm(i, show)
+}
+```
+
+#report
+```{r}
+Report.Differential.binding.SEs.H3K27ac.hypoxia.times <- lapply(Differential.binding.SEs.H3K27ac.hypoxia.times, function(df) {
+  report <- dba.report(df, th = 1)
+  return(report)
+})
+```
+
+
+
+#Annoto tutti i picchi con ChIPseeker
+```{r}
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene::TxDb.Hsapiens.UCSC.hg38.knownGene
+
+Report.Differential.binding.SEs.H3K27ac.hypoxia.times.Annotated.df <- lapply(Report.Differential.binding.SEs.H3K27ac.hypoxia.times, function(df) {
+  Anno <- as.data.frame(annotatePeak(df, tssRegion = c(-3000, 3000),
+                          columns = c("ENTREZID", "ENSEMBL", "SYMBOL", "GENENAME"),
+                          annoDb="org.Hs.eg.db",
+                          TxDb = txdb))
+})
+```
+
+#check del pvalue
+```{r}
+for (i in names(Report.Differential.binding.SEs.H3K27ac.hypoxia.times.Annotated.df)) {
+pvals <- Report.Differential.binding.SEs.H3K27ac.hypoxia.times.Annotated.df[[i]]$p.value
+histo <- hist(pvals,
+    breaks = 100,
+    main = i
+    )
+print(histo)
+}
+```
+
+#salvo in excel
+```{r}
+openxlsx::write.xlsx(Report.Differential.binding.SEs.H3K27ac.hypoxia.times.Annotated.df, file = "/media/alessio/Data/hypoxia/ChIPseq/tables/H3K27ac_tables/Superenhancers_DiffBind_results/SEs.H3K27ac.Vsnormoxia.xlsx")
+```
+
+#Vediamo se ci sono dei SEs esclusivi di H4KO a 24 ore
+```{r}
+retrievexclusive <- function(x) {
+  H4KO.vs.CAS9 <- makeGRangesFromDataFrame((Report.Differential.binding.SEs.H3K27ac.Annotated.df$H24_H4KO_vs_CAS9 |> 
+                                              dplyr::filter(Fold > 0 & p.value <= 0.05)), keep.extra.columns = T)
+  H4KO.H24 <- makeGRangesFromDataFrame((Report.Differential.binding.SEs.H3K27ac.hypoxia.times.Annotated.df$H4KO_24h |> 
+                                              dplyr::filter(Fold > 0 & p.value <= 0.05)), keep.extra.columns = T)
+  Overlap <- subsetByOverlaps(H4KO.vs.CAS9, H4KO.H24)
+  return(Overlap)
+}
+
+HDAC4.24h.exclusive <- retrievexclusive()
+```
+
+
+

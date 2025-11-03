@@ -108,9 +108,21 @@
 # #computeMatrix
 # computeMatrix reference-point --referencePoint TSS --upstream 5000 --downstream 5000 --missingDataAsZero -R /media/alessio/Data/genome110/gencode/gencode.v44.annotation.gtf -S /media/alessio/Data/hypoxia/ChIPseq/samples/H3K4ME1/C1C/C1C_RPKM.bw  /media/alessio/Data/hypoxia/ChIPseq/samples/H3K4ME1/C2F/C2F_RPKM.bw        /media/alessio/Data/hypoxia/ChIPseq/samples/H3K4ME1/K125I1/K125I1_RPKM.bw /media/alessio/Data/hypoxia/ChIPseq/samples/H3K4ME1/C1F/C1F_RPKM.bw  /media/alessio/Data/hypoxia/ChIPseq/samples/H3K4ME1/C2I/C2I_RPKM.bw        /media/alessio/Data/hypoxia/ChIPseq/samples/H3K4ME1/K26C1/K26C1_RPKM.bw /media/alessio/Data/hypoxia/ChIPseq/samples/H3K4ME1/C1I/C1I_RPKM.bw  /media/alessio/Data/hypoxia/ChIPseq/samples/H3K4ME1/K125C1/K125C1_RPKM.bw /media/alessio/Data/hypoxia/ChIPseq/samples/H3K4ME1/C2C/C2C_RPKM.bw  /media/alessio/Data/hypoxia/ChIPseq/samples/H3K4ME1/K125F1/K125F1_RPKM.bw -o /media/alessio/Data/hypoxia/ChIPseq/Deeptools_matrix/H3K4me1_matrix_compared_RPKM.gz --numberOfProcessors 10
 
-#plotProfile
-plotProfile -m Deeptools_matrix/H3K4me1_matrix_compared_RPKM.gz  -out H3K4me1_Profile_RPKM.png --plotTitle "H3K4me1" --perGroup --plotHeight 10 --plotWidth 15 
+# #plotProfile
+# plotProfile -m Deeptools_matrix/H3K4me1_matrix_compared_RPKM.gz  -out H3K4me1_Profile_RPKM.png --plotTitle "H3K4me1" --perGroup --plotHeight 10 --plotWidth 15 
 
 
-#plotHeatmap
-plotHeatmap -m /media/alessio/Data/hypoxia/ChIPseq/Deeptools_matrix/H3K4me1_matrix_compared_RPKM.gz -o heatmap_H3K4me1_compare_RPKM.png
+# #plotHeatmap
+# plotHeatmap -m /media/alessio/Data/hypoxia/ChIPseq/Deeptools_matrix/H3K4me1_matrix_compared_RPKM.gz -o heatmap_H3K4me1_compare_RPKM.png
+
+
+# Bigwig average
+bigwigAverage -b \
+    /media/alessio/Data/hypoxia/ChIPseq/samples/H3K4ME1/C1C/C1C.bamCoverageRPKM.bw \
+    /media/alessio/Data/hypoxia/ChIPseq/samples/H3K4ME1/C2C/C2C.bamCoverageRPKM.bw \
+    -o /media/alessio/Data/hypoxia/ChIPseq/BigWigAverage/H3K4me1/bamCoverage/CAS9_normoxia_H3K4me1.bw -p 6
+
+bigwigAverage -b \
+    /media/alessio/Data/hypoxia/ChIPseq/samples/H3K4ME1/K125C1/K125C1.bamCoverageRPKM.bw \
+    /media/alessio/Data/hypoxia/ChIPseq/samples/H3K4ME1/K26C1/K26C1.bamCoverageRPKM.bw \
+    -o /media/alessio/Data/hypoxia/ChIPseq/BigWigAverage/H3K4me1/bamCoverage/H4KO_normoxia_H3K4me1.bw -p 6

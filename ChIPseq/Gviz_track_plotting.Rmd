@@ -82,6 +82,8 @@ plotTracks(list(genes38, gtrack), chromosome = "chr20", from = 37301941, to = 37
 
 
 
+
+
 #.##############################
 #Intersezioni H3K27ac H2BK120ac
 #.##############################
@@ -286,18 +288,22 @@ pathBigWigAverage <- "/media/alessio/Data/hypoxia/ChIPseq/BigWigAverage"
 filesBigWigAverage <- c("H3K27ac/bamCoverage/CAS9_normoxia_H3K27ac.bw",
                          "H3K27ac/bamCoverage/H4KO_normoxia_H3K27ac.bw",
                         "H2BK120ac/bamCoverage/CAS9_normoxia_H2BK120ac.bw",
-                         "H2BK120ac/bamCoverage/H4KO_normoxia_H2BK120ac.bw")
+                         "H2BK120ac/bamCoverage/H4KO_normoxia_H2BK120ac.bw",
+                        "H3K4me1/bamCoverage/CAS9_normoxia_H3K4me1.bw",
+                         "H3K4me1/bamCoverage/H4KO_normoxia_H3K4me1.bw")
 
 names <- c("Cas9_H3K27ac",
            "H4KO_H3K27ac",
            "Cas9_H2BK120ac",
-           "H4KO_H2BK120ac")                      
+           "H4KO_H2BK120ac",
+          "Cas9_H3K4me1",
+           "H4KO_H3K4me1")                      
 
 BigWigAverage.Normoxia.Datatracks <- list()
 
-options(ucscChromosomeNames=FALSE) 
+options(ucscChromosomeNames=FALSE)
 
-colors <- c("#32004F", "#32004F", "#69B437","#69B437")
+colors <- c('#ba226e', '#ba226e', '#059e54', '#059e54', '#104ade', '#104ade')
 for (i in seq_along(filesBigWigAverage)) {
   namezz <- names[i]
   
@@ -309,7 +315,7 @@ for (i in seq_along(filesBigWigAverage)) {
                         type= "histogram",
                         fill.histogram = colors[i] ,
                         col.histogram = colors[i] ,
-                        ylim = c(0,70)) #settato a 30 per le tracks di intersection , a 70 per i SEs
+                        ylim = c(0,40)) #settato a 30 per le tracks di intersection , a 70 per i SEs
   BigWigAverage.Normoxia.Datatracks[[namezz]] <- DATATRACK
   rm(BW, DATATRACK)
 }
@@ -423,9 +429,9 @@ HDAC4_track <- AnnotationTrack(range = HDAC4_peaks,
 HDAC4_bigwig <- import.bw("/media/alessio/Data/NAR2020_Cb/SK1_trimmed-25_markdup_RPKM.bw") %>% 
   DataTrack(., name = "HDAC4_bw",
               type= "histogram",
-            fill.histogram = "darkblue",
-            col.histogram = "darkblue",
-            ylim = c(0,150)
+            fill.histogram = "orange",
+            col.histogram = "orange",
+            ylim = c(0,100)
             )
 ```
 
@@ -448,21 +454,21 @@ SEs.DOWN.bed <- read.delim("DiffBind_bed_files/Superenhancers/SEs_H3K27ac_Cas9_v
 
 #funzione per plottare (modifico quella precedente)
 ```{r}
-plot.and.save.track.Bw.avg <- function(Sample, locus, from, to, chr) {
+plot.and.save.track.Bw.avg <- function(Sample, locus, from, to, chr, realstart, realend) {
   
   #creo una highlighttrack per far vedere il picco
   Highlight_peak <- HighlightTrack(genes38,
-                                   start = from+30000,
-                                   end = to-30000,
+                                   start = realstart,
+                                   end = realend,
                                    chromosome = chr)
   
-  pdf(paste0("/media/alessio/Data/hypoxia/ChIPseq/Figure_paper/Tracks_SEs_HDAC4/",Sample,"_",locus,".pdf"), height = 12, width = 30)
+  png(paste0("/media/alessio/Data/hypoxia/ChIPseq/Figure_paper/Tracks_SEs_HDAC4/",Sample,"_",locus,".png"), height = 15, width = 30, units = 'cm', res = 300)
   
   track <- plotTracks(c(BigWigAverage.Normoxia.Datatracks,
                         HDAC4_bigwig,
                         Highlight_peak
   ),
-  sizes = c(1,1,1,1,1,0.3),
+  sizes = c(1,1,1,1,1,1,1,0.3),
   from = from,
   to = to,
   chromosome = chr,
@@ -478,7 +484,7 @@ plot.and.save.track.Bw.avg <- function(Sample, locus, from, to, chr) {
   position.title = "right",
   labelPos="revAlternating",
   margin = 200,
-  cex.axis = 1,
+  cex.axis = 0.7,
   separator = 0,
   cex.title = 1
   ) 
@@ -495,6 +501,39 @@ apply(SEs.UP.bed[c(1:15),],
       plot.and.save.track.Bw.avg("SEs.UP.HDAC4peaks", row["LOCUS"], as.numeric(row["START"])-30000, as.numeric(row["END"])+30000,
                                  row["CHROM"])
       })
+
+
+
+# chr5:93395427-93656793
+# chr5:93564555-93609265
+plot.and.save.track.Bw.avg("SEs.UP.HDAC4peaks", 'chr5:93564555-93609265' , 92406196, 93812306, 'chr5', 93564555, 93609265)
+
+# chr5:58782931-59311742
+# chr5:58860683-59198224
+plot.and.save.track.Bw.avg("SEs.UP.HDAC4peaks", 'chr5:58782931-59198224' , 58553985, 59311742, 'chr5', 58860683, 59198224)
+
+# chr9:13204438-14823161
+# chr9:14302360-14434739 
+plot.and.save.track.Bw.avg("SEs.UP.HDAC4peaks", 'chr9:14302360-14434739' , 13204438, 14823161, 'chr9', 14302360, 14434739)
+
+# poised to active with HDAC4
+# chr6:90,014,009-90,324,261
+# chr6:90215207-90221809
+plot.and.save.track.Bw.avg("poised_to_active.HDAC4peaks", 'chr6:90215207-90221809' , 90014009, 90324261, 'chr6', 90215207, 90221809)
+
+# chr1:78,506,227-78,713,434
+# chr1:78616129-78627923
+plot.and.save.track.Bw.avg("poised_to_active.HDAC4peaks", 'chr1:78616129-78627923' , 78506227, 78713434, 'chr1', 78616129, 78627923)
+
+# active to poised
+# chr5:88,630,416-88,800,152
+# chr5:88674075-88674997
+plot.and.save.track.Bw.avg("active_to_poised.HDAC4peaks", 'chr5:88674075-88674997', 88630416, 88800152, 'chr5', 88674075, 88674997)
+
+
+# chr7:96,854,787-97,273,937
+# chr7:97023308-97025679
+plot.and.save.track.Bw.avg("active_to_poised.HDAC4peaks", 'chr7:97023308-97025679', 96854787, 97273937, 'chr7', 97023308, 97025679)
 
 apply(SEs.DOWN.bed[c(1:15),],
       MARGIN = 1,

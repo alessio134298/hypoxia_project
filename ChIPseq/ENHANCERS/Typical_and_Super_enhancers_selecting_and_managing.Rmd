@@ -6,6 +6,7 @@ title: SEs and TEs extraction from ROSE output
 library(tidyverse)
 library(GenomicRanges)
 library(ChIPpeakAnno)
+library(glue)
 ```
 
 ## Estraggo i Tyical enhancers e Super enhancers dal file che contiene sia TEs che SEs
@@ -280,5 +281,32 @@ for (i in names(SEs.list.H2BK120ac.Granges)) {
                   fill = c("darkgreen", "lightblue"),
                   margin = 0.1)
 }
+```
+
+# Overlap between HDAC4 KO and WT SEs
+```{r}
+for (n in c ('H3K27ac', 'H2BK120ac')) {
+  
+  if (n == 'H3K27ac') {
+    listx = SEs.list.H3K27ac.Granges.Consensus.Rep}
+  else {
+    listx = SEs.list.H2BK120ac.Granges.Consensus.Rep}
+  
+  for (i in 1:(length(listx) / 2)) {
+  a <- listx[[i]]
+  b <- listx[[i + 3]]
+  name_a <- names(listx)[i]
+  name_b <- names(listx)[i + 3]
+  
+  png(filename = paste0('/media/alessio/Data/hypoxia/ChIPseq/plot/ROSE_Venn/SEs_venn_intersect_',n,"_",name_a,"_",name_b,".png"))
+  makeVennDiagram(Peaks = list(a, b), 
+                  NameOfPeaks = c(name_a, name_b),
+                  main = glue('SEs {n}'),
+                  margin = 0.1
+  )
+  dev.off()
+}  
+}
+
 ```
 

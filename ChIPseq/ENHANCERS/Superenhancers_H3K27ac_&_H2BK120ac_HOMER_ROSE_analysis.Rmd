@@ -594,6 +594,7 @@ dev.off()
 
 #plot SEs e TEs H3K27ac (solo normoxia per ora)
 ```{r}
+# H3K27ac
 path_H3K27ac = "/media/alessio/Data/hypoxia/ChIPseq/ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H3K27ac"
 dir_H3K27ac = c("C1A", "C1D", "C1G",
          "C2A", "C2D", "C2G",
@@ -611,15 +612,33 @@ for (i in dir_H3K27ac) {
     dplyr::arrange(Signal)
   Enhancers.H3K27ac[[i]] <- tmp.df
 }
+
+# H2BK120ac
+path_H2BK120ac = "/media/alessio/Data/hypoxia/ChIPseq/ROSE_analysis/rose_bitbucket_python2_results/RESULTS_ROSE_H2BK120ac"
+dir_H2BK120ac = c("C1B", "C1E", "C1H",
+         "C2B", "C2E", "C2H",
+         "K125B1", "K125E1", "K125H1",
+         "K26B1", "K26E1", "K26H1")
+filename = "_peaks_AllEnhancers.table.txt"
+
+Enhancers.H2BK120ac <- list()
+
+for (i in dir_H2BK120ac) {
+  tmp.path = file.path(path_H2BK120ac,i,paste0(i,filename))
+  tmp.df <- read.delim(tmp.path, skip = 5, header = T) |> 
+    dplyr::mutate(Signal = human_only_sorted.bam - input_human_only_sorted.bam) |> 
+    dplyr::mutate(Signal = ifelse(Signal > 0, Signal, 0)) |> 
+    dplyr::arrange(Signal)
+  Enhancers.H2BK120ac[[i]] <- tmp.df
+}
 ```
 
 #plot
 ```{r}
 SEs.plot <- function(df, name) {
   
-  TEs_count <- count(df$isSuper == 0)
-  SEs_count <- count(df$isSuper == 1)
-  
+  TEs_count <- sum(df$isSuper == 0)
+  SEs_count <- sum(df$isSuper == 1)
   
   
   SEplot <- df |> 
@@ -643,15 +662,21 @@ SEs.plot <- function(df, name) {
           plot.margin = unit(c(0.5, 0.5, 0.5, 0.5), "cm"))
   
   return(SEplot)
-}  
+}
 
 SEs.plots <- lapply(names(Enhancers.H3K27ac), function(name) {
   plot <- SEs.plot(Enhancers.H3K27ac[[name]], name)
 })
 
-SEs_plot_grid_normoxia <- gridExtra::grid.arrange(grobs = SEs.plots[c(1,4,7,10)], ncol = 2, top=textGrob("H3K27ac Normoxia Enhancers"))
+SEs.plots.H2BK120ac <- lapply(names(Enhancers.H2BK120ac), function(name) {
+  plot <- SEs.plot(Enhancers.H2BK120ac[[name]], name)
+})
 
-ggsave(SEs_plot_grid_normoxia, filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/Enhancers_H3K27ac_normoxia_ROSE.png", dpi = 300, height = 6, width = 10)
+SEs_plot_grid_normoxia <- gridExtra::grid.arrange(grobs = SEs.plots[c(1,4,7,10)], ncol = 2, top=grid::textGrob("H3K27ac Normoxia Enhancers"))
+SEs_plot_H2BK120ac_grid_normoxia <- gridExtra::grid.arrange(grobs = SEs.plots.H2BK120ac[c(1,4,7,10)], ncol = 2, top=grid::textGrob("H2BK120ac Normoxia Enhancers"))
+
+ggsave(SEs_plot_grid_normoxia, filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/Enhancers_H3K27ac_normoxia_ROSE.pdf", height = 6, width = 10)
+ggsave(SEs_plot_H2BK120ac_grid_normoxia, filename = "/media/alessio/Data/hypoxia/ChIPseq/plot/Enhancers_H2BK120ac_normoxia_ROSE.pdf", height = 6, width = 10)
 ```
 
 #Venn diagram SEs H3K27ac normoxia
@@ -686,4 +711,3 @@ Venn.SEs.H3K27ac.normoxia <- makeVennDiagram(Peaks = Normoxia.H3K27ac.SEs.Grange
                 margin = 0.1)
 dev.off()
 ```
-
