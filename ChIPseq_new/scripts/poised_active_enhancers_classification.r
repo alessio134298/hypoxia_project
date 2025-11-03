@@ -57,6 +57,15 @@ HDAC4_peaks <- readPeakFile('/media/alessio/Data/NAR2020_Cb/GSM3882325_HDAC4_DMS
 enhancers_classification_normoxia[["H4KO_poised_to_active_with_HDAC4"]] <- subsetByOverlaps(enhancers_classification_normoxia$H4KO_poised_to_active,
                                                                                  HDAC4_peaks)
 
+# ACTIVE in HDAC4 KO with HDAC4 peaks
+enhancers_classification_normoxia[["H4KO_active_with_HDAC4"]] <- subsetByOverlaps(enhancers_classification_normoxia$H4KO_active_enh_norm,
+                                                                                            HDAC4_peaks)
+
+# ACTIVE to POISED in HDAC4 KO
+enhancers_classification_normoxia[["H4KO_active_to_poised"]] <- subsetByOverlaps(enhancers_classification_normoxia$H4KO_poised_enh_norm,
+                                                                                 enhancers_classification_normoxia$Cas9_active_enh_norm)
+
+
 for (i in names(enhancers_classification_normoxia)) {
   
   peak <- sort(enhancers_classification_normoxia[[i]]) %>% 

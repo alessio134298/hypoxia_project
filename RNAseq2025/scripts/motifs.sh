@@ -1,32 +1,33 @@
 #!/bin/bash
 
 genome='/media/alessio/Data/genome110/gencode/GRCh38.primary_assembly.genome.fa'
-path='/media/alessio/Data/hypoxia/ChIPseq_new'
-samples=(H4KO_poised_to_active.bed H4KO_poised_to_active_with_HDAC4.bed)
+path='/media/alessio/Data/hypoxia/RNAseq2025'
+path_wf='/media/alessio/Data/hypoxia/RNAseq2025/work_files'
+samples=(promoters_only_interaction_genes_up.bed promoters_only_interaction_genes_down.bed)
+background=$(echo "${path_wf}/promoters_all_gtf_v45.bed")
+motifs='/home/alessio/tools/Homer/data/knownTFs/HOCOMOCOv11_full_HUMAN_mono_homer_format.motifs'
+
+echo $background
 
 n=6
 max_jobs=2
 current_jobs=0
 
+ 
 for sample in ${samples[@]}; do
-    
+
     samplename=$(echo "$sample" | sed 's\.bed\\g')
     (
     findMotifsGenome.pl \
-        "${path}/poised_active_class/${sample}" \
+        "${path_wf}/${sample}" \
         "${genome}" \
         "${path}/motifs_analysis/${samplename}" \
         -size given \
         -p "$n" \
         -nomotif \
-        -mknown /home/alessio/tools/Homer/data/knownTFs/all.motifs
-
-
-    bedtools getfasta \
-        -fi "${genome}" \
-        -bed "${path}/poised_active_class/${sample}" \
-        > "${path}/motifs_analysis/${samplename}/${samplename}.fa" 
-    ) &
+        -mknown "${motifs}" \
+        -bg "${background}"
+    ) & 
     
     ((current_jobs++))
 
@@ -34,5 +35,4 @@ for sample in ${samples[@]}; do
         wait
         current_jobs=0
     fi
-
 done

@@ -266,6 +266,7 @@ for (i in unique(hypoxia_interaction$time)) {
   DOWN_genes[[i]] <- na.omit(DOWN$symbol)
 }
 
+# save to txt 
 for (i in names(UP_genes)) {
   file = paste0(pathx,'/','up_interaction_',i,'.txt')
   write_lines(UP_genes[[i]], file = file)
@@ -275,7 +276,6 @@ for (i in names(DOWN_genes)) {
   file = paste0(pathx,'/','down_interaction_',i,'.txt')
   write_lines(DOWN_genes[[i]], file = file)
 }
-
 
 # clones separated
 pathx <- '/media/alessio/Data/hypoxia/RNAseq2025/interaction_hypoxia_common'
@@ -361,12 +361,10 @@ for (i in names(Down_intersect)) {
   file = paste0(pathx,'/','down_common_interaction_',i,'.txt')
   write_lines(Down_intersect[[i]], file = file)
 }
-
 ```
 what happens here is that we have some genes that have different behavior in HDAC4 KO than in KO,
-For example the Up-regulated does not mean that they are Up regulated in absolute, but they have an up-regulation in HDAC4 KO
-that is not observed in Cas9, but Cas9 can have initially an higher absolute expression of that genes
-This is why if then we plot this genes in a heatmap we don't see that they are in absolute up-regulated
+For example the Up-regulated does not mean that they are Up regulated in absolute, but they have an increased de-regulation
+in HDAC4 KO than in Cas9, this can be both UP and DOWN. 
 
 
 

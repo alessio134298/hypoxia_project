@@ -3,6 +3,7 @@ library(tidyverse)
 library(ggpubr)
 library(ChIPseeker)
 library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(rtracklayer)
 
 txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene::TxDb.Hsapiens.UCSC.hg38.knownGene
 ```
@@ -19,19 +20,55 @@ python poised_active_enhancers_signal_calc.py
 
 ### Load data
 ```{r}
-filex <- list.files('../tables', pattern = 'bcomp_RPKM_signal.csv', full.names = T)
+filex <- paste0('../tables/',paste0(c('Cas9_active_enh_norm',
+                                      'Cas9_poised_enh_norm',
+                                      'H4KO_active_enh_norm',
+                                      'H4KO_poised_enh_norm',
+                                      'H4KO_poised_to_active',
+                                      'H4KO_active_to_poised'),'_with_bcomp_RPKM_signal.csv'))
 
 data <- tibble(files = filex, 
                 names = str_remove(basename(files), "_with_bcomp_RPKM_signal.csv"))
 
 data <- data %>% 
   mutate(data = map(files, \(x) read_delim(x)))
+```
 
+
+# barplot to quantify the number of enhancers
+```{r}
+count_enhancers <- data %>% 
+  unnest() %>% 
+  group_by(names) %>% 
+  summarise(count = n())
+
+barplot_enhancers <- count_enhancers %>% 
+  mutate(type = ifelse(str_detect(names, 'Cas9'), 'Cas9', 'H4KO'),
+         shift = ifelse(str_detect(names, 'poised_to_active|active_to_poised'), 'shift', 'no')) %>% 
+  ggplot(aes(x = names, y = count, fill = type)) +
+  geom_col(color = 'black', width = 0.8) +
+  geom_text(aes(x = names, label = count), vjust = 2) + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+        strip.text = element_blank()) +
+  facet_wrap(~ shift, scales = 'free', space = 'free_x') +
+  labs(x = NULL)
+
+barplot_enhancers
+
+ggsave(barplot_enhancers,
+       filename = '../plot/barplot_enhancers_quantification.pdf',
+       height = 5, 
+       width = 6,
+       device = 'pdf')
+```
+
+# divide Cas9 and HDAC4 KO
+```{r}
 Cas9_data <- data %>% 
   dplyr::filter(str_detect(names, 'Cas9'))
 
 H4KO_data <- data %>% 
-  dplyr::filter(str_detect(names, 'H4KO') & str_detect(names, 'H4KO_poised_to_active', negate = T))
+  dplyr::filter(str_detect(names, 'H4KO') & str_detect(names, 'H4KO_poised_to_active|H4KO_active_to_poised', negate = T))
 ```
 
 # violin boxplot
@@ -49,12 +86,12 @@ plot_func <- function(df) {
                                  'H3K4me1' = '#104ade')) +
     lims(y = c(-2, 6)) +
     facet_wrap(~ names) +
-    stat_compare_means(comparisons = list(c('H3K27ac', 'H2BK120ac'),
-                                          c('H2BK120ac', 'H3K4me1'),
-                                          c('H3K27ac', 'H3K4me1')),
-                       method = 'wilcox.test',
-                       label = 'p.signif',
-                       vjust = 0.5) +
+    # stat_compare_means(comparisons = list(c('H3K27ac', 'H2BK120ac'),
+    #                                       c('H2BK120ac', 'H3K4me1'),
+    #                                       c('H3K27ac', 'H3K4me1')),
+    #                    method = 'wilcox.test',
+    #                    label = 'p.signif',
+    #                    vjust = 0.5) +
     stat_compare_means(method = 'kruskal.test',
                        vjust = 0.5, 
                        size = 3) +
@@ -95,13 +132,13 @@ H4KO_enhancers_plot + ggtitle('HDAC4 KO')
 # save plots
 ```{r}
 ggsave(Cas9_enhancers_plot + ggtitle('Cas9'),
-       filename = '../plot/boxplot_enhancers_poised_active_Cas9.pdf',
+       filename = '../plot/boxplot_enhancers_poised_active_Cas9.png',
        width = 8, height = 6,
-       device = 'pdf')
+       device = 'png')
 ggsave(H4KO_enhancers_plot + ggtitle('HDAC4 KO'),
-       filename = '../plot/boxplot_enhancers_poised_active_H4KO.pdf',
+       filename = '../plot/boxplot_enhancers_poised_active_H4KO.png',
        width = 8, height = 6,
-       device = 'pdf')
+       device = 'png')
 ```
 
 # stratification into promoter, gene body TSS
@@ -151,12 +188,12 @@ plot_func_2 <- function(df) {
                                  'H3K4me1' = '#104ade')) +
     lims(y = c(-2, 6)) +
     facet_wrap(~ names + anno_refined) +
-    stat_compare_means(comparisons = list(c('H3K27ac', 'H2BK120ac'),
-                                          c('H2BK120ac', 'H3K4me1'),
-                                          c('H3K27ac', 'H3K4me1')),
-                       method = 'wilcox.test',
-                       label = 'p.signif',
-                       vjust = 0.5) +
+    # stat_compare_means(comparisons = list(c('H3K27ac', 'H2BK120ac'),
+    #                                       c('H2BK120ac', 'H3K4me1'),
+    #                                       c('H3K27ac', 'H3K4me1')),
+    #                    method = 'wilcox.test',
+    #                    label = 'p.signif',
+    #                    vjust = 0.5) +
     stat_compare_means(method = 'kruskal.test',
                        vjust = 0.5, 
                        size = 3) +
@@ -181,7 +218,8 @@ ggsave(H4KO_enhancers_plot_stratified + ggtitle('HDAC4 KO'), filename = '../plot
 
 ## Observations:
 The classification of poised and active enhancers make sense by looking at the coverage.
-I was expecting H2BK120ac to have major signal over poised enhancers and especially in intergenic regions but it is not the case, or very very slight.
+I was expecting H2BK120ac to have major signal over poised enhancers and especially in intergenic regions but this is not the case, 
+or at last the difference is very very slight.
 
 
 ```{r}
@@ -190,34 +228,43 @@ I was expecting H2BK120ac to have major signal over poised enhancers and especia
 ```
 
 
-# Poised to active with HDAC4 binding site
-Now we want to see if regions that exhibits a shift from poised to active enhancers in HDAC4 KO are more enriched in some marker, or by subsetting these regions for the co-presence of HDAC4 peaks.
+# Poised-to-active and Active-to-poised with HDAC4 binding site
+Now we want to see if regions that exhibits a shift from poised to active enhancers in HDAC4 KO are more enriched in some marker,
+or by subsetting these regions for the co-presence of HDAC4 peaks.
 
 ```{r}
-# we recycle te functions used before
-H4KO_data_poised_to_active <- data %>% 
-  dplyr::filter(str_detect(names, 'H4KO_poised_to_active'))
+# select the shift poised to active and active to poised
+H4KO_data_enhancer_shift <- data %>% 
+  dplyr::filter(str_detect(names, 'H4KO_poised_to_active|H4KO_active_to_poised')) %>% 
+  unnest(data) 
 
-H4KO_data_poised_to_active_long <- H4KO_data_poised_to_active %>% 
-  unnest(data) %>% 
+# make longer
+H4KO_data_enhancer_shift_long <- H4KO_data_enhancer_shift %>% 
   pivot_longer(cols = contains('RPKM'), names_to = "sample", values_to = 'RPKM') %>% 
   mutate(sample = basename(sample)) %>% 
   mutate(mark = case_when(
     str_detect(sample, 'K125A1|K26A1') ~ 'H3K27ac',
     str_detect(sample, 'K125B1|K26B1') ~ 'H2BK120ac',
     str_detect(sample, 'K125C1|K26C1') ~ 'H3K4me1'
-  ))
+  )) 
+
+# poised to active
+H4KO_data_poised_to_active_long <- H4KO_data_enhancer_shift_long %>% 
+  dplyr::filter(names == 'H4KO_poised_to_active')
+
+# active to poised
+H4KO_data_active_to_poised_long <- H4KO_data_enhancer_shift_long %>% 
+  dplyr::filter(names == 'H4KO_active_to_poised')
+
 
 # Plot
 H4KO_data_poised_to_active_long_plot <- plot_func(H4KO_data_poised_to_active_long)
 H4KO_data_poised_to_active_long_plot + ggtitle('HDAC4 KO poised to active')
 
-# annotate and plot
-H4KO_data_poised_to_active_long_anno <- annotate_refine(H4KO_data_poised_to_active_long)
-H4KO_data_poised_to_active_plot_stratified <- plot_func_2(H4KO_data_poised_to_active_long_anno) + lims(y = c(-2, 6))
-H4KO_data_poised_to_active_plot_stratified
+H4KO_data_active_to_poised_long_plot <- plot_func(H4KO_data_active_to_poised_long)
+H4KO_data_active_to_poised_long_plot + ggtitle('HDAC4 KO active to poised')
 ```
-```{r}
+```{r, eval = F}
 ggsave(H4KO_data_poised_to_active_plot_stratified, filename ='../plot/boxplot_H4KO_posied_to_active.png', height = 7, width = 7)
 ```
 
@@ -226,28 +273,52 @@ ggsave(H4KO_data_poised_to_active_plot_stratified, filename ='../plot/boxplot_H4
 ```{r}
 HDAC4_peaks <- readPeakFile('../../../NAR2020_Cb/GSM3882325_HDAC4_DMSO_SKUT_peaks.narrowPeak')
 
-overlaps_with_HDAC4 <- unique(
+# we want also to look at the already active enhancers 
+H4KO_data_active_long <- H4KO_data_long %>% 
+  dplyr::filter(str_detect(names, 'H4KO_active_enh_norm'))
+
+
+
+# calculate the HDAC4 overlaps
+overlaps_with_HDAC4_active <- unique(
   queryHits(
   findOverlaps(
-    H4KO_data_poised_to_active_long_anno %>% 
+    H4KO_data_active_long %>% 
       makeGRangesFromDataFrame(keep.extra.columns = T),
     HDAC4_peaks)
   )
 )
 
-# create a bed of poised to active with HDAC4
-H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info <- H4KO_data_poised_to_active_long_anno
+overlaps_with_HDAC4_poised_to_active <- unique(
+  queryHits(
+  findOverlaps(
+    H4KO_data_poised_to_active_long %>% 
+      makeGRangesFromDataFrame(keep.extra.columns = T),
+    HDAC4_peaks)
+  )
+)
+
+# create a dataframe of poised to active with HDAC4
+H4KO_data_active_long_anno_HDAC4_peaks_info <- H4KO_data_active_long
+H4KO_data_active_long_anno_HDAC4_peaks_info$overlaps_HDAC4 <- 'no'
+H4KO_data_active_long_anno_HDAC4_peaks_info$overlaps_HDAC4[overlaps_with_HDAC4_active] <- 'yes'
+H4KO_data_active_long_anno_HDAC4_peaks_info$overlaps_HDAC4 <- 
+  factor(H4KO_data_active_long_anno_HDAC4_peaks_info$overlaps_HDAC4,
+         levels = c("no", "yes"))
+
+H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info <- H4KO_data_poised_to_active_long
 H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info$overlaps_HDAC4 <- 'no'
 H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info$overlaps_HDAC4[overlaps_with_HDAC4] <- 'yes'
 H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info$overlaps_HDAC4 <- 
   factor(H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info$overlaps_HDAC4,
          levels = c("no", "yes"))
 
-library(ggplot2)
-library(ggpubr)
-library(dplyr)
 
-H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info_plot <- H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info %>%
+# combine the dataframe
+H4KO_data_active_and_poised_to_active_long_anno_HDAC4_peaks_info <-
+  bind_rows(H4KO_data_active_long_anno_HDAC4_peaks_info, H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info)
+
+H4KO_data_active_and_poised_to_active_long_anno_HDAC4_peaks_info_plot <- H4KO_data_active_and_poised_to_active_long_anno_HDAC4_peaks_info %>%
   ggplot(aes(x = overlaps_HDAC4, y = RPKM, fill = overlaps_HDAC4)) +
   geom_violin(position = position_dodge(width = 0.8)) +
   geom_boxplot(
@@ -258,29 +329,165 @@ H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info_plot <- H4KO_data_poised_t
   ) +
   scale_fill_manual(values = c("yes" = "red",
                                "no" = "blue")) +
-  facet_wrap(~ mark, scales = "free_x") +
-  stat_compare_means(
-    comparisons = list(c("yes", "no")),
-    method = "wilcox.test",
-    label = "p.signif",
-    vjust = 0.5
-  ) +
+  facet_wrap(~ mark + names,
+             scales = "free_x",
+             nrow = 1) +
   theme_bw() +
   theme(
     axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)
   ) +
-  lims(y =c(-2, 6))
+  lims(y =c(-1, 4))
 
-H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info_plot
+H4KO_data_active_and_poised_to_active_long_anno_HDAC4_peaks_info_plot
 ```
 
 ### save
-```{r}
-ggsave(H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info_plot,
+```{r, eval = F}
+ggsave(H4KO_data_active_and_poised_to_active_long_anno_HDAC4_peaks_info_plot,
        filename= '../plot/HDAC4_presence_boxplot_H4KO_posied_to_active.pdf',
-       height = 6, width = 6,
+       height = 6, width = 12,
        device = 'pdf')
 ```
+
+# calculating the HDAC4 signal over our set of active poised and shift
+# signal is expressed as the mean of the score over the enhancer, this accounts for difference in peak size
+```{r}
+# function to calculate bigwig signal
+calculate_bw_signal_over_bed <- function(bed_gr, bw) {
+  
+   df <- as.data.frame(mergeByOverlaps(bed_gr, bw)) %>%
+    group_by(bed_gr.seqnames, bed_gr.start, bed_gr.end) %>%
+    summarise(Score = mean(score, na.rm = T)) %>% 
+    ungroup() 
+   
+}
+
+# load HDAC4 bw
+HDAC4_bw <- import.bw('../../../NAR2020_Cb/SK1_trimmed-25_markdup_RPKM.bw')
+MEF2D_bw <- import.bw('../../../NAR2020_Cb/SK3_trimmed-25_markdup_RPKM.bw')
+
+# enhancers bed files
+filex <- list.files('../poised_active_class/', full.names = T)
+filex <- filex[str_detect(filex, 'HDAC4|H3K27ac', negate = T)]
+
+# load peak file and countthe number of overlaps with HDAC4
+# and calculate HDAC4 bigwig signal
+enhancers <- list()
+HDAC4_over_enhancers_quantification <- list()
+MEF2D_over_enhancers_quantification <- list()
+
+for (i in filex) {
+  name = str_remove(basename(i), '.bed')
+  enh <- readPeakFile(i)
+  enhancers[[name]] <- enh
+  
+  print(name)
+  print(paste0('Sum of overlaps og HDAC4 peaks is: ',sum(countOverlaps(enh, HDAC4_peaks))))
+  
+  # calculate the signal of HDAC4 bw and MEF2D bw
+  bw_signal_HDAC4 <- calculate_bw_signal_over_bed(enh, HDAC4_bw)
+  bw_signal_MEF2D <- calculate_bw_signal_over_bed(enh, MEF2D_bw)
+  
+  # HDAC4
+  value_vec_H4 <- bw_signal_HDAC4$Score
+  value_H4 <- mean(value_vec_H4, na.rm = T)
+  print(paste0('HDAC4 signal is: ',value_H4))
+  
+  # MEF2D
+  value_vec_M2 <- bw_signal_MEF2D$Score
+  value_M2 <- mean(value_vec_M2, na.rm = T)
+  print(paste0('MEF2D signal is: ',value_M2))
+  
+  #
+  HDAC4_over_enhancers_quantification[[name]] <- bw_signal_HDAC4
+  MEF2D_over_enhancers_quantification[[name]] <- bw_signal_MEF2D
+
+}
+```
+# boxplot HDAC4 and MEF2D
+```{r}
+# HDAC4
+HDAC4_over_enhancers_quantification_long <- HDAC4_over_enhancers_quantification %>% 
+  enframe %>% 
+  unnest() %>% 
+  mutate(type = ifelse(str_detect(name, 'Cas9'), 'Cas9', 'H4KO'),
+         shift = ifelse(str_detect(name, 'poised_to_active|active_to_poised'), 'shift', 'no')) 
+
+
+stat_data <- HDAC4_over_enhancers_quantification_long %>%
+  filter(shift == 'shift')
+
+HDAC4_over_enhancers_boxplot <- HDAC4_over_enhancers_quantification_long %>% 
+  ggplot(aes(x = name, y = log2(Score), fill = type)) +
+  geom_boxplot() +
+  stat_compare_means(method = 'wilcox.test', data = stat_data,
+                     comparisons = list(c('H4KO_poised_to_active', 'H4KO_active_to_poised'))) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+        strip.text = element_blank()) +
+  facet_wrap(~ shift, scales = 'free_x', space = 'free_x') +
+  labs(x = NULL,
+        y = 'log2(RPKM)',
+       title = 'HDAC4 RPKM over enhancers')
+
+# MEF2D
+MEF2D_over_enhancers_quantification_long <- MEF2D_over_enhancers_quantification %>% 
+  enframe %>% 
+  unnest() %>% 
+  mutate(type = ifelse(str_detect(name, 'Cas9'), 'Cas9', 'H4KO'),
+         shift = ifelse(str_detect(name, 'poised_to_active|active_to_poised'), 'shift', 'no')) 
+
+
+stat_data <- MEF2D_over_enhancers_quantification_long %>%
+  filter(shift == 'shift')
+
+stat_data %>% 
+  group_by(name) %>% 
+  summarise(Score = mean(Score)) %>% 
+  pivot_wider(names_from = name, values_from = Score) %>% 
+  mutate(diff = H4KO_active_to_poised - H4KO_poised_to_active)
+
+MEF2D_over_enhancers_boxplot <- MEF2D_over_enhancers_quantification_long %>% 
+  ggplot(aes(x = name, y = log2(Score), fill = type)) +
+  geom_boxplot() +
+  stat_compare_means(method = 'wilcox.test', data = stat_data,
+                     comparisons = list(c('H4KO_poised_to_active', 'H4KO_active_to_poised'))) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+        strip.text = element_blank()) +
+  facet_wrap(~ shift, scales = 'free_x', space = 'free_x') +
+  labs(x = NULL,
+        y = 'log2(RPKM)',
+       title = 'MEF2D RPKM over enhancers')
+
+HDAC4_over_enhancers_boxplot
+MEF2D_over_enhancers_boxplot
+```
+
+### save
+```{r, eval = F}
+ggsave(HDAC4_over_enhancers_boxplot,
+       filename = '../plot/boxplot_HDAC4_over_enhancers.pdf',
+       height = 7,
+       width = 5,
+       device = 'pdf')
+ggsave(MEF2D_over_enhancers_boxplot,
+       filename = '../plot/boxplot_MEF2D_over_enhancers.pdf',
+       height = 7,
+       width = 5,
+       device = 'pdf')
+```
+
+# check to look at the size of active to poised and poised to active
+```{r}
+HDAC4_over_enhancers_quantification_long %>% 
+  mutate(width = abs(bed_gr.start - bed_gr.end)
+         ) %>% 
+  group_by(name) %>% 
+  summarize(width = median(width))
+```
+
+
 
 
 

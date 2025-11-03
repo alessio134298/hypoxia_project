@@ -114,7 +114,7 @@ write_csv(Norm_counts %>% rownames_to_column('gene_id_version'), file =  file.pa
 # We aim to do the analysis on the clones separated and then put them together in the end.
 # We want to see if the KO has an interaction effect due to hypoxia so we need the interaction term,
 
-# after trying different ways I amde up my mid that the best is to splite the dds object in two, it was too messy with one reference level
+# after trying different ways I made up my mid that the best is to split the dds object in two, it was too messy with one reference level
 dds_125 <- dds[, dds$clone_group %in% c("CAS9_cl.125_ctrl", "HDAC4_KO_cl.125")]
 dds_26  <- dds[, dds$clone_group %in% c("CAS9_cl.26_ctrl",  "HDAC4_KO_cl.26")]
 
