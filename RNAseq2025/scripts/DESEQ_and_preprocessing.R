@@ -7,6 +7,9 @@ suppressMessages({
 
 pathx = '/media/alessio/Data/hypoxia/RNAseq2025/'
 
+smallestGroupSize <- 2
+min_count <- 10
+
 ### general objects and function
 #Genes object
 {
@@ -63,13 +66,12 @@ dds <- DESeqDataSet(Hypoxia_se_summarized_to_genes,
 
 ### DESeq
 # PCA also with the bactheffect correction
-smallestGroupSize <- 2
-keep <- rowSums(counts(dds) >= 10) >= smallestGroupSize
+keep <- rowSums(counts(dds) >= min_count) >= smallestGroupSize
 dds <- dds[keep,]
 
 dds <- DESeq(dds)
 
-#TRASFORM & PCA
+# TRASFORM & PCA
 vsd <- vst(dds,  blind=FALSE)
 
 pcaData <- plotPCA(vsd, intgroup =c("clone", "time"), returnData = T)
@@ -93,8 +95,8 @@ PCA_allsamples_corrected <- PCA_func(pcaData_corrected, PC1, PC2, percentVar_cor
 PCA_allsamples_corrected
 
 # save PCA
-ggsave(PCA_allsamples, filename = file.path(pathx,'plot/PCA_all_samples.png'), height = 6, width = 7)
-ggsave(PCA_allsamples_corrected, filename = file.path(pathx,'plot/PCA_all_samples_corrected.png'), height = 6, width = 7)
+ggsave(PCA_allsamples, filename = file.path(pathx,'plot/PCA_all_samples.pdf'), height = 6, width = 7)
+ggsave(PCA_allsamples_corrected, filename = file.path(pathx,'plot/PCA_all_samples_corrected.pdf'), height = 6, width = 7)
 
 
 # save the TPM, normalized and vsd counts
@@ -102,9 +104,9 @@ TPM <- assay(dds, 'abundance') %>% as.data.frame()
 VSD <- assay(vsd) %>% as.data.frame() %>% as.data.frame()
 Norm_counts <- DESeq2::counts(dds, normalized = T) %>%  as.data.frame()
 
-write_csv(TPM %>% rownames_to_column('gene_id_version'), file = file.path(pathx,'tables/TPM.csv'))
-write_csv(VSD %>% rownames_to_column('gene_id_version'), file = file.path(pathx,'/tables/VSD.csv'))
-write_csv(Norm_counts %>% rownames_to_column('gene_id_version'), file =  file.path(pathx,'/tables/Norm_counts.csv'))
+write_csv(TPM %>% rownames_to_column('gene_id_version'), file = file.path(pathx,'tables/TPM_all.csv'))
+write_csv(VSD %>% rownames_to_column('gene_id_version'), file = file.path(pathx,'/tables/VSD_all.csv'))
+write_csv(Norm_counts %>% rownames_to_column('gene_id_version'), file =  file.path(pathx,'/tables/Norm_counts_all.csv'))
 
 
 
@@ -215,6 +217,8 @@ for (i in names(results_hypoxia_independent)) {
 
 
 # Interaction effect clones taken together
+# this is the result we used eventually
+
 # re do the design
 dds_int <- dds
 design(dds_int) <- ~ type + time + type:time
@@ -246,3 +250,27 @@ for (i in names(results_interaction_hypoxia_clones_together)) {
   
   write_tsv(df, file = file.path(pathx,paste0('DEGs_tabs/',i,'.tsv')))
 }
+
+
+# LRT test with reduced model
+# same design as the one for the interaction effect
+dds_lrt <- dds
+design(dds_lrt) <- ~ type + time + type:time
+dds_lrt <- DESeq(dds_lrt, test = 'LRT', reduced = ~ type + time)
+resultsNames(dds_lrt)
+
+# the manual says that:
+# we have to ignore the L2FC, it does not mean anything relevant, in the output it will print: 
+# log2 fold change (MLE): typeHDAC4 KO.time48 
+# LRT p-value: '~ type + time + type:time' vs '~ type + time' 
+# But it does not mean that it is testng only that time point, it like a place holder
+# we only take the FDR or pvalue of this test, not the L2FC
+lrt_test_results <- results(dds_lrt) %>% 
+  as.data.frame() %>% 
+  rownames_to_column('gene_id_version') %>% 
+  left_join(gns_geneidversion_symbol_entrezid,
+            by = 'gene_id_version')
+
+name <- 'LRT_test_HDAC4_vs_Cas9_anytimepoint'
+write_tsv(lrt_test_results, file = file.path(pathx,paste0('DEGs_tabs/',name,'.tsv')))
+

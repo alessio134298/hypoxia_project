@@ -1,0 +1,75 @@
+```{r setup, echo = F}
+library(tidyverse)
+library(ChIPseeker)
+library(org.Hs.eg.db)
+library(clusterProfiler)
+library(GenomicRanges)
+```
+
+```{r}
+HIF1A_peaks <- read.delim("macs3_peaks/SRR18097068_macs3_peaks.narrowPeak", header = F) %>% 
+  dplyr::rename("CHROM" = V1, "START" = V2, "END" = V3)
+view(HIF1A_peaks)
+```
+
+#Annoto con ChIPseeker
+```{r}
+txdb = TxDb.Hsapiens.UCSC.hg38.knownGene::TxDb.Hsapiens.UCSC.hg38.knownGene
+
+HIF1A_peaks_anno <- annotatePeak(HIF1A_peaks %>% 
+                                   makeGRangesFromDataFrame(.),
+                                 TxDb = txdb,
+                                 annoDb = "org.Hs.eg.db",
+                                 tssRegion = c(-3000, 3000),
+                                 flankDistance = 5000,
+                                 level = "gene"
+                                 )
+
+plotAnnoBar(HIF1A_peaks_anno)
+```
+#enrichment (vediamo se escono fuori robe di ipossia)
+```{r}
+library(patchwork)
+
+Filter_and_plot_enrichments <- function(peaks_anno, onlypromoter) {
+  
+  data <- peaks_anno@anno %>% 
+    as.data.frame()
+  
+  if (onlypromoter == "Y") {
+    data <- data %>% 
+      dplyr::filter(str_detect(annotation, "Promoter"))
+  }
+  
+  GO_HIF1A_enrichment <- enrichGO(data %>% 
+                                  dplyr::select(SYMBOL) %>%
+                                  unlist(),
+                                  keyType = "SYMBOL",
+                                  ont = "BP",
+                                  OrgDb = "org.Hs.eg.db"
+  )
+  
+  KEGG_HIF1A_enrichment <- enrichKEGG(data %>% 
+                                      dplyr::select(geneId) %>% 
+                                      unlist()
+  )
+  
+  GO_barplot <- barplot(GO_HIF1A_enrichment, showCategory = 10) * ggtitle(str_c("GO ", if (onlypromoter == "Y") {"(Peaks on Promoter)"} else {"All"}))
+  KEGG_barplot <- barplot(KEGG_HIF1A_enrichment, showCategory = 10) + ggtitle(str_c("KEGG ", if (onlypromoter == "Y") {"(Peaks on Promoter)"} else {"All"}))
+  
+  Barplot <- (GO_barplot + KEGG_barplot) + plot_layout(widths = unit(c(8,8), c("cm", "cm")))
+  return(Barplot)
+}
+
+
+enrich_HIF1a_barplot_promoter <- Filter_and_plot_enrichments(HIF1A_peaks_anno, "Y")
+enrich_HIF1a_barplot_all <- Filter_and_plot_enrichments(HIF1A_peaks_anno, "N")
+
+enrich_HIF1a_barplot_composed <- enrich_HIF1a_barplot_promoter / enrich_HIF1a_barplot_all 
+enrich_HIF1a_barplot_composed
+```
+
+```{r}
+ggsave(enrich_HIF1a_barplot_composed, filename = "PRJNA809308/plot/GO_KEGG_enrichment.png", dpi = 300, height = 10, width = 15)
+```
+

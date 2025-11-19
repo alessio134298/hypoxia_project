@@ -1,0 +1,351 @@
+```{r, setup}
+library(tidyverse)
+library(ChIPseeker)
+library(GenomicRanges)
+library(GenomicFeatures)
+library(clusterProfiler)
+library(ChIPpeakAnno)
+```
+
+#Carico picchi di EPAS1 e riduco
+```{r}
+EPAS1_peaks <- readPeakFile("EPAS1_data/EPAS1_selected_final.bed")
+EPAS1_peaks_reduced <- IRanges::reduce(EPAS1_peaks, drop.empty.ranges = T)
+
+chr = str_c("chr", c(1:22, "X", "Y"))
+
+EPAS1_peaks_reduced <- EPAS1_peaks_reduced[seqnames(EPAS1_peaks_reduced) %in% chr]
+
+print(EPAS1_peaks_reduced)
+```
+
+#Salvo
+```{r}
+EPAS1_peaks_reduced_df <- EPAS1_peaks_reduced |> as.data.frame() |> dplyr::mutate(name = ".") |> dplyr::relocate(name, .before= width) |> dplyr::arrange(seqnames)
+
+write_delim(EPAS1_peaks_reduced_df, delim = "\t", file = "EPAS1_data/EPAS1_final_reduced.bed", col_names = F)
+```
+
+#Annotazione ChIPseeker
+```{r}
+txdb = makeTxDbFromGFF("/media/alessio/Data/genome110/gencode/gencode.v45.annotation.gtf")
+
+Anno_EPAS1_peaks_reduced <- annotatePeak(EPAS1_peaks_reduced, TxDb = txdb, level = "gene", annoDb = "org.Hs.eg.db")
+
+plotAnnoBar(Anno_EPAS1_peaks_reduced) + scale_fill_viridis_d(option = "B") 
+```
+
+#Gene Ontology
+```{r}
+GO.HIF2a <- enrichGO(Anno_EPAS1_peaks_reduced@anno$SYMBOL, OrgDb = "org.Hs.eg.db", keyType = "SYMBOL", ont = "BP")
+
+dotplot(GO.HIF2a, title = "HIF2a GO enrichment", showCategory = 20) 
+```
+
+#Elimino bleacklisted regions
+
+```{bash}
+bedtools intersect -a EPAS1_data/EPAS1_final_reduced.bed -b ../../../genome110/hg38-blacklist.v2.bed -v > EPAS1_data/EPAS1_final_reduced_no_blacklist.bed
+```
+
+
+#Vedo come si comporta questo dato con tutti i putative binding site di EPAS1 e ARNT
+```{r}
+EPAS1_final_reduced_no_blacklist <- readPeakFile(peakfile = "EPAS1_data/EPAS1_final_reduced_no_blacklist.bed")
+
+EPAS1_all_binding_sites <- readPeakFile(peakfile = "../HIF2a_all_putative_binding_sites_noRandom.bed")
+
+ARNT_all_binding_sites <- readPeakFile(peakfile = "../HIF1b_all_putative_binding_sites_noRandom.bed")
+```
+
+#Plot intersezioni
+```{r}
+png(filename = "EPAS1_intersect_putative_binding_sites.png")
+makeVennDiagram(Peaks = list(EPAS1_final_reduced_no_blacklist, EPAS1_all_binding_sites, ARNT_all_binding_sites), NameOfPeaks = c("EPAS1_atl_no_bkst", "EPAS1_all", "ARNT_all"))
+dev.off()
+```
+
+
+#Creo diversi set di intersezioni
+```{r}
+EPAS1_sets <- list("EPAS1" = EPAS1_final_reduced_no_blacklist,
+    "EPAS1_on_EPAS1_motif" = subsetByOverlaps(EPAS1_final_reduced_no_blacklist, EPAS1_all_binding_sites),
+    "EPAS1_on_ARNT_motif" = subsetByOverlaps(EPAS1_final_reduced_no_blacklist, ARNT_all_binding_sites))
+
+
+EPAS1_sets["EPAS1_on_EPAS1_ARNT_summed"] <- c(EPAS1_sets[["EPAS1_on_EPAS1_motif"]], EPAS1_sets[["EPAS1_on_ARNT_motif"]]) |> IRanges::reduce()
+```
+
+#Annotazione
+```{r}
+EPAS1_sets_anno <- lapply(EPAS1_sets, function(x) {
+    anno <- annotatePeak(x, TxDb = txdb, annoDb = "org.Hs.eg.db", level = "gene")
+    return(anno)
+})
+```
+
+```{r}
+plotAnnoBar(EPAS1_sets_anno)
+plotDistToTSS(EPAS1_sets_anno)
+```
+
+#Salvo questi dataset
+```{r}
+lapply(names(EPAS1_sets)[2:4], function(x) {
+    
+    df <- EPAS1_sets[[x]] |> as.data.frame() |> 
+        dplyr::select(seqnames, start, end) |>
+        dplyr::mutate(name = ".", score = 1, strand = ".")
+    write_delim(df, file = str_c("EPAS1_data/",x,".bed"), delim = "\t", col_names = F)
+})
+```
+
+#Plot ChIPPeakanno
+```{r}
+EPAS1_sets_L <- GRangesList(EPAS1_sets) 
+genomicElementDistribution(EPAS1_sets_L, TxDb = txdb)
+```
+
+
+
+#Clustering dei campioni
+```{r}
+#Per fare il clustering avrei due possibilità, o utilizzare i campioni già divisi per cell line (nella cartella EPAS1_data/cell_lines_splitted_data), oppure prendere il dataframe non ridotto e non blacklisted, che contiene ancora le info delle cell lines, uso il secondo perchè mi viene più comodo caricare un solo file in cui ci sono già solamente le linee che mi interessano
+
+EPAS1_selected <- read_delim("EPAS1_data/EPAS1_selected_final.bed", col_names = F)
+EPAS1_selected_reduced_blacklisted <- read_delim("EPAS1_data/EPAS1_final_reduced_no_blacklist.bed", col_names = F)
+
+# creo una named list con i campioni separati per SRX
+Intersections <- EPAS1_selected |> 
+    nest_by(X7) |> #è la colonna con SRX
+    dplyr::rename("SRX" = "X7", "Peaks" = "data") %>%
+    dplyr::mutate(Peaks = list(makeGRangesFromDataFrame(Peaks, seqnames.field = "X1", start.field = "X2", end.field = "X3"))) |> #trasformo in granges
+    dplyr::mutate(Reduced = list(makeGRangesFromDataFrame(EPAS1_selected_reduced_blacklisted,  seqnames.field = "X1", start.field = "X2", end.field = "X3"))) |> #aggiungo il dataframe ridotto
+    dplyr::mutate(Overlaps = list( Reduced %over% Peaks)) #ritorna una colonna con T o F se c'è l'overlap o meno
+
+#Convert in una matrice logical
+Matrix <- Intersections |> 
+    dplyr::select(SRX, Reduced, Overlaps) |> 
+    dplyr::mutate(Reduced = list(as.data.frame(Reduced))) |> 
+    unnest(c(Overlaps, Reduced)) |> 
+    pivot_wider(names_from = SRX, values_from = Overlaps) |> 
+    dplyr::select(-c(width, strand)) |> 
+    dplyr::mutate(locus = paste0(seqnames,":",start,"-",end)) |> 
+    dplyr::select(-c(seqnames,start,end)) |> 
+    dplyr::relocate(locus)
+```
+
+#salvo matrice
+```{r}
+write_delim(Matrix, file = "EPAS1_data/Matrix_Overlaps_EPAS1.tsv", delim = "\t")
+```
+
+#PCA e Clustering (k-means)
+```{r}
+#Questo che segue è l'unico modo per transporre correttamente senza perdere nomi delle colonne o righe
+library(data.table)
+library(cluster)
+
+Matrix <- read_tsv("EPAS1_data/Matrix_Overlaps_EPAS1.tsv") |> 
+    column_to_rownames("locus")
+
+t_Matrix <- transpose(Matrix) 
+rownames(t_Matrix) <- colnames(Matrix)
+colnames(t_Matrix) <- rownames(Matrix)
+###
+
+###Cluster su samples
+pca_samples = prcomp(t_Matrix, center = T, scale. = F)
+
+pca_samples_1_2 <- pca_samples$x[,1:2] %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "SRX")
+
+#corrispondenze SRX -- cell_line
+SRX_cell_line = read_delim("EPAS1_data/Available_cells.tsv")
+
+pca_samples_1_2 <- pca_samples_1_2 |> 
+    left_join(SRX_cell_line, join_by("SRX" == "SRX ID"))
+
+PCAplot_samples <- ggplot(pca_samples_1_2, aes(x = PC1, y = PC2, color = `Cell type`)) +
+  geom_point(size = 4) +
+  geom_text(aes(label = `SRX`), hjust = -0.1, vjust = -1) +
+  theme_bw()
+
+PCAplot_samples
+
+#Con kmeans divido i campioni in tre gruppi
+#silouhette
+Ks=sapply(2:10,
+    function(i) 
+      summary(silhouette(pam(t_Matrix,k=i)))$avg.width)
+plot(2:10,Ks,xlab="k",ylab="av. silhouette",type="b",
+     pch=19)
+
+cluster_result <- kmeans(pca_samples$x[,1:2], centers = 4) 
+cluster_groups <- cluster_result$cluster |> unlist()
+
+#Aggiungo i gruppi
+pca_samples_1_2[["kmeans_group"]] <- as.character(cluster_groups) 
+
+# Add cluster assignments to the PCA plot
+PCAplot_samples_kmeans <- ggplot(pca_samples_1_2, aes(x = PC1, y = PC2, shape = kmeans_group, color = `Cell type`)) +
+  geom_point(size = 4) +
+  geom_text(aes(label = `SRX`), hjust = -0.1, vjust = -1) +
+  theme_bw()
+
+PCAplot_samples_kmeans
+ggsave(PCAplot_samples_kmeans, file = "PCA_samples_kmeans.png", dpi = 300, height = 6, width = 8)
+
+
+
+###Cluster sui picchi
+pca_peaks = prcomp(Matrix, center = T, scale. = F)
+
+pca_peaks_1_2 <- pca_peaks$x[,1:2] %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "Locus")
+
+PCAplot_peaks <- ggplot(pca_peaks_1_2, aes(x = PC1, y = PC2)) +
+  geom_point(size = 4) +
+  theme_bw()
+
+PCAplot_peaks
+
+#Con kmeans divido i campioni in tre gruppi
+#silouhette per vedere in quanti cluster separarli
+Ks=sapply(2:10,
+    function(i) 
+      summary(silhouette(pam(Matrix,k=i)))$avg.width)
+plot(2:10,Ks,xlab="k",ylab="av. silhouette",type="b",
+     pch=19)
+
+cluster_result <- kmeans(pca_peaks$x[,1:2], centers = 4) 
+cluster_groups <- cluster_result$cluster |> unlist()
+
+#Aggiungo i gruppi
+pca_peaks_1_2[["kmeans_group"]] <- as.character(cluster_groups) 
+
+# Add cluster assignments to the PCA plot
+PCAplot_peaks_kmeans <- ggplot(pca_peaks_1_2, aes(x = PC1, y = PC2, color = kmeans_group)) +
+  geom_point(size = 4) +
+  theme_bw()
+
+PCAplot_peaks_kmeans
+ggsave(PCAplot_peaks_kmeans, file = "PCA_peaks_kmeans.png", dpi = 300, height = 6, width = 8)
+```
+
+
+#Salvo come file i cluster di picchi
+```{r}
+#Samples
+Groups_sample <- pca_samples_1_2 |> 
+    dplyr::select(kmeans_group, SRX) |> 
+    group_by(kmeans_group) |> 
+    summarize(Samples = list(SRX)) |> 
+    deframe()
+
+Groups_peaks <- pca_peaks_1_2 |> 
+    dplyr::select(kmeans_group, Locus) |> 
+    group_by(kmeans_group) |> 
+    summarize(Samples = list(Locus)) |> 
+    deframe()
+
+names(Groups_sample) <- str_c("Sample_", names(Groups_sample))
+names(Groups_peaks) <- str_c("Peaks_", names(Groups_peaks))
+
+Groups <- c(Groups_sample, Groups_peaks)
+names(Groups)
+
+
+
+#Questo va usato per i cluster di picchi
+EPAS1_peaks_reduced <- read_delim("EPAS1_data/EPAS1_final_reduced_no_blacklist.bed", col_names = F) |> 
+    dplyr::mutate(Locus = str_c(X1,":",X2,"-",X3))
+
+#Questo per i cluster sui sample
+EPAS1_peaks <- read_delim("EPAS1_data/EPAS1_selected_final.bed", col_names = F)
+blacklisted <- readPeakFile("/media/alessio/Data/genome110/hg38-blacklist.v2.bed")
+
+EPAS1_clusters <- list()
+
+for (i in names(Groups)) {
+    if (str_detect(i, "Sample")) {
+        df <- EPAS1_peaks %>%
+            dplyr::filter(X7 %in% Groups[[i]]) |> 
+            makeGRangesFromDataFrame(seqnames.field = "X1", start.field = "X2", end.field = "X3") %>%
+            IRanges::reduce() %>%
+            subsetByOverlaps(blacklisted, invert = T) %>%
+            as_tibble()
+
+    } else if (str_detect(i, "Peaks")) {
+        df <- EPAS1_peaks_reduced |> 
+            dplyr::filter(Locus %in% Groups[[i]])
+    }
+    df <- df |> 
+        dplyr::select(1:3) |> 
+        dplyr::mutate(name = ".", score = "1", strand = ".")
+    EPAS1_clusters[[i]] <- df
+
+    write_delim(EPAS1_clusters[[i]], file = paste0("EPAS1_data/cluster_Peakset/",i,"_EPAS1_peaks.bed"), col_names = F, delim = "\t")
+}
+```
+
+
+```{r}
+Anno_EPAS1_clusters <- lapply(EPAS1_clusters, function(x) {
+    
+    colnames(x) <- c("seqnames", "start", "end", "name", "score", "strand")
+
+    Gr <- makeGRangesFromDataFrame(x)
+    Anno <- annotatePeak(Gr, annoDb = "org.Hs.eg.db", TxDb = txdb, level = "gene")
+    return(Anno)
+})
+
+
+Annobar_cluster <- plotAnnoBar(Anno_EPAS1_clusters, title = "EPAS1 clusters") + scale_fill_viridis_d(option = "A")
+ggsave(Annobar_cluster, file = "EPAS1_data/clusters_distribution.png", dpi = 300, height = 6, width = 6)
+plotDistToTSS(Anno_EPAS1_clusters)
+```
+
+```{r}
+GO_EPAS1_clusters <- lapply(Anno_EPAS1_clusters, function(x) {
+    GO <- enrichGO(gene = x@anno$SYMBOL,
+        OrgDb = "org.Hs.eg.db", 
+        keyType = "SYMBOL",
+        ont = "BP")
+
+    return(GO)
+})
+
+lapply(GO_EPAS1_clusters, function(x) {
+    dotplot(x)
+})
+
+dotplot(GO_EPAS1_clusters$Sample_2)
+```
+
+Heatmap con i risultati di EnricharD
+```{r}
+files <- list.files(path = "EPAS1_data", pattern = "Diffbind_on_EPAS1.txt", full.names = T)
+
+#creo il dataframe per fare Heatmap
+Perm_test_Results <- tibble(files = files) |> 
+    dplyr::mutate(Results = map(files, \(x) read_delim(x, col_names = T))) |> 
+    dplyr::mutate(Sample = str_remove(basename(files), "Diffbind_on_EPAS1.txt")) |> 
+    dplyr::select(-files) |> 
+    unnest(Results) |> 
+    dplyr::select(Sample, Target, Zscore, P.value) |> 
+    dplyr::mutate(Zscore = ifelse(P.value < 0.05, Zscore, NA))#se pvalue > 0.05 lo Zscore diventa NA
+    
+
+Heatmap <- ggplot(data = Perm_test_Results, aes(x = Sample, y = Target, fill = Zscore)) +
+    geom_tile(color = "black") +
+    geom_text(aes(label = round(Zscore, digits = 2))) +
+    scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, na.value = "grey") +
+    theme(axis.text.x = element_text(angle = 90))
+
+Heatmap
+
+ggsave(Heatmap, file = "EPAS1_data/Heatmap_Zscore_Perm_test.png", dpi = 300, height = 10, width = 10)
+```

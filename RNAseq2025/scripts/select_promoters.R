@@ -42,16 +42,26 @@ promoters_all_gtf_v45 <- promoters(genes, upstream = upstream, downstream = down
 promoters_only_goi_up <- promoters_all_gtf_v45[promoters_all_gtf_v45$gene_name %in% genes_interaction_up, ]
 promoters_only_goi_down <- promoters_all_gtf_v45[promoters_all_gtf_v45$gene_name %in% genes_interaction_down, ]
 
+
+# also the promoters -3000 +3000 to correlate with ChIPseq
+promoters_all_gtf_v45_3000 <- promoters(genes, upstream = 3000, downstream = 3000)
+
 files = list('promoters_all_gtf_v45' = promoters_all_gtf_v45,
+             'promoters_all_gtf_v45_3000' = promoters_all_gtf_v45_3000,
              'promoters_only_interaction_genes_up' = promoters_only_goi_up,
              'promoters_only_interaction_genes_down' = promoters_only_goi_down)
 
 
 # save as bed file
+# added a mutate to avoid having start or end with negative values, by the way some are still out of chromosome size
 for (name in names(files)) {
   files[[name]] %>% 
     as.data.frame() %>%
+    dplyr::mutate(start = ifelse(start < 0, 1, start),
+                  end = ifelse(end < 0, 1, end)
+    ) %>% 
     dplyr::select(seqnames, start, end, gene_name, score, strand) %>% 
     write_tsv(file = paste0(savef,'/',name,'.bed'), col_names = F)
 }
+
 

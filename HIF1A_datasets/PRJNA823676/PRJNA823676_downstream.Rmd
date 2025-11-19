@@ -1,0 +1,330 @@
+```{r setup, echo = F}
+library(tidyverse)
+library(GenomicRanges)
+library(ChIPpeakAnno)
+library(ChIPseeker)
+library(GenomicFeatures)
+```
+
+#convertiti tutti con liftover ad hg38
+```{bash}
+for i in *.bed ; do samplename=$(basename "$i" | awk -F "." '{print $1}'); /home/alessio/tools/liftOver "$i" /media/alessio/Data/genome110/hg19ToHg38.over.chain "$samplename"_liftedtohg38.bed unmapped; rm unmapped; done
+```
+
+
+#importo i file 
+```{r}
+beds <- list.files("/media/alessio/Data/hypoxia/HIF1A_datasets/PRJNA823676/bed", full.names = T, pattern = "lifted")
+
+#creo tabella con location dei file ecc
+bed_files_HIF <- tibble(
+  files = beds
+) %>% 
+  dplyr::mutate(cell_line = str_split_i(basename(files), "_", 2),
+                TF = ifelse(str_detect(basename(files), "HIF1A"), "HIF1A", "HIF2A")
+                )
+
+#i file in formato granges sono nested dentro al dataframe
+bed_files_HIF <- bed_files_HIF %>% 
+  dplyr::mutate(peakset = map(files, \(x) read.delim(x, header = F) %>% makeGRangesFromDataFrame(.,
+                                                                                                 seqnames.field = "V1",
+                                                                                                 start.field = "V2",
+                                                                                                 end.field = "V3",
+                                                                                                 keep.extra.columns=T)))
+
+```
+
+#Overlap tra i picchi (Venn diagram)
+```{r}
+for (i in 1:(nrow(bed_files_HIF)/2)) {
+  peak1 <- bed_files_HIF$peakset[[i*2]]
+  peak2 <- bed_files_HIF$peakset[[(i*2)-1]]
+  
+  name1 <- str_c(bed_files_HIF$cell_line[i*2],"_", bed_files_HIF$TF[i*2])
+  name2 <- str_c(bed_files_HIF$cell_line[(i*2)-1],"_", bed_files_HIF$TF[(i*2)-1])
+  
+  makeVennDiagram(Peaks = list(peak1, peak2),
+                NameOfPeaks = c(name1, name2),
+                maxgap = 400)  
+}
+```
+
+#Overlap, subestbyoverlaps e salvo bed files
+```{r}
+Consensus_HIF1a_HIF2a <- list()
+
+for (i in 1:(nrow(bed_files_HIF)/2)) {
+  
+  peak1 <- bed_files_HIF$peakset[[i*2]]
+  peak2 <- bed_files_HIF$peakset[[(i*2)-1]]
+  
+  name <- str_c(bed_files_HIF$cell_line[i*2],"_", bed_files_HIF$TF[i*2])
+  
+  
+  
+  Consensus <- subsetByOverlaps(peak1, peak2)  
+  
+  Consensus_HIF1a_HIF2a[[name]] <- as.data.frame(Consensus)
+}
+
+names(Consensus_HIF1a_HIF2a)
+```
+
+#salvataggio
+```{r}
+for (i in names(Consensus_HIF1a_HIF2a)) {
+  write_delim(Consensus_HIF1a_HIF2a[[i]], file = str_c("/media/alessio/Data/hypoxia/HIF1A_datasets/PRJNA823676/Consensus_bed/",i,"_consensus.bed"), 
+              delim = '\t',
+              col_names = F)
+}
+```
+
+
+##########
+#HIF1A
+##########
+```{r}
+HIF1a.4.cell.lines = list.files("Consensus_bed", pattern = "HIF1A", full.names = T)
+
+HIF1a.all.Granges <- list()
+
+for (i in HIF1a.4.cell.lines) {
+  
+  name = basename(i)
+  
+  tmp.Gr <- readPeakFile(i)
+  
+  HIF1a.all.Granges[[name]] <- tmp.Gr
+}
+
+
+ # mcols(HIF1a.all.Granges[[1]])$X = "ciao"
+
+summary(HIF1a.all.Granges)
+```
+
+```{r}
+png("Venn_all_HIF1a_cell_lines.png", res = 300, height = 22, width = 22, units = "cm")
+makeVennDiagram(Peaks = list(HIF1a.all.Granges[[1]], HIF1a.all.Granges[[2]], HIF1a.all.Granges[[3]], HIF1a.all.Granges[[4]]), maxgap = 400,
+              NameOfPeaks = names(HIF1a.all.Granges), margin =0.2)
+dev.off()
+```
+
+#creo un dataset ridotto sommando le 4 cell lines 
+```{r}
+HIF1a.4.cell.lines <- c(HIF1a.all.Granges[[1]], HIF1a.all.Granges[[2]], HIF1a.all.Granges[[3]], HIF1a.all.Granges[[4]]) %>% reduce()
+```
+
+```{r}
+HIF1a.4.cell.lines %>% 
+  as.data.frame() %>%
+  dplyr::filter(nchar(as.vector(seqnames)) < 6) %>% #rimuovo cromosomi random
+  dplyr::mutate(score = ".") %>% 
+  dplyr::relocate(score, .before = strand) %>% 
+  write_delim(file = "HIF1a.4.cell.lines.bed", col_names = F, delim = "\t")
+```
+
+#Annotazione con ChIPseeker
+```{r}
+txdb <- makeTxDbFromGFF("/media/alessio/Data/genome110/gencode/gencode.v44.annotation.gtf")
+
+Anno.HIF1a.4.cell.lines <- annotatePeak(HIF1a.4.cell.lines,
+                                        TxDb = txdb,
+                                        annoDb = "org.Hs.eg.db",
+                                        level = "gene",
+                                        tssRegion = c(-3000, 3000))
+```
+
+#Plot Annobar e Go enrichment
+```{r}
+(plotAnnoBar(Anno.HIF1a.4.cell.lines, title = "HIF1a") + scale_fill_viridis_d(option = "B")) %>% ggsave(filename = "Annobar_HIF1a.4.cell.lines.png", dpi = 300, height = 4, width = 8)
+
+GO.HIF1a <- enrichGO(Anno.HIF1a.4.cell.lines@anno$SYMBOL, OrgDb = "org.Hs.eg.db", keyType = "SYMBOL", ont = "BP")
+
+dotplot(GO.HIF1a, title = "HIF1a GO enrichment") %>% ggsave(filename = "GO_enrichment_HIF1a_4_cell_lines.png" ,dpi = 300, height = 8, width = 7)
+```
+
+
+##########
+#HIF2A
+##########
+```{r}
+HIF2a.4.cell.lines = list.files("Consensus_bed", pattern = "HIF2A", full.names = T)
+
+HIF2a.all.Granges <- list()
+
+for (i in HIF2a.4.cell.lines) {
+  
+  name = basename(i)
+  
+  tmp.Gr <- readPeakFile(i)
+  
+  HIF2a.all.Granges[[name]] <- tmp.Gr
+}
+
+
+ # mcols(HIF1a.all.Granges[[1]])$X = "ciao"
+
+summary(HIF2a.all.Granges)
+```
+
+```{r}
+png("Venn_all_HIF2a_cell_lines.png", res = 300, height = 22, width = 22, units = "cm")
+makeVennDiagram(Peaks = list(HIF2a.all.Granges[[1]], HIF2a.all.Granges[[2]], HIF2a.all.Granges[[3]], HIF2a.all.Granges[[4]]), maxgap = 400,
+              NameOfPeaks = names(HIF2a.all.Granges), margin =0.2)
+dev.off()
+```
+
+#metto insieme tutte le 4 cell line e salvo bed
+```{r}
+HIF2a.4.cell.lines <- c(HIF2a.all.Granges[[1]], HIF2a.all.Granges[[2]], HIF2a.all.Granges[[3]], HIF2a.all.Granges[[4]]) %>% reduce()
+```
+
+```{r}
+HIF2a.4.cell.lines %>% 
+  as.data.frame() %>% 
+  dplyr::filter(nchar(as.vector(seqnames)) < 6) %>% #rimuovo cromosomi random
+  dplyr::mutate(score = ".") %>% 
+  dplyr::relocate(score, .before = strand) %>% 
+  write_delim(file = "HIF2a.4.cell.lines.bed", col_names = F, delim = "\t")
+```
+
+
+```{r}
+txdb <- makeTxDbFromGFF("/media/alessio/Data/genome110/gencode/gencode.v44.annotation.gtf")
+
+Anno.HIF2a.4.cell.lines <- annotatePeak(HIF2a.4.cell.lines,
+                                        TxDb = txdb,
+                                        annoDb = "org.Hs.eg.db",
+                                        level = "gene",
+                                        tssRegion = c(-3000, 3000))
+```
+
+#plot Annobar e Go enrichment
+```{r}
+(plotAnnoBar(Anno.HIF2a.4.cell.lines, title = "HIF2a") + scale_fill_viridis_d(option = "B")) %>% ggsave(filename = "Annobar_HIF2a.4.cell.lines.png", dpi = 300, height = 4, width = 8)
+
+GO.HIF2a <- enrichGO(Anno.HIF2a.4.cell.lines@anno$SYMBOL, OrgDb = "org.Hs.eg.db", keyType = "SYMBOL", ont = "BP")
+
+dotplot(GO.HIF2a, title = "HIF2a GO enrichment") %>% ggsave(filename = "GO_enrichment_HIF2a_4_cell_lines.png" ,dpi = 300, height = 8, width = 7)
+```
+
+
+####################
+#HIF1a -- HIF2a
+###################
+```{r}
+png("Venn_HIF1a_HIF2a.png", res = 300, units = "cm", height = 10, width = 10)
+makeVennDiagram(Peaks = list(HIF1a.4.cell.lines, HIF2a.4.cell.lines),
+                NameOfPeaks = c("HIF1a", "HIF2a"),
+                margin = 0.1)
+dev.off()
+```
+
+#
+```{r}
+library(clusterProfiler)
+hypoxia_hallmarks_genes <-read.gmt("/home/alessio/Downloads/HALLMARK_HYPOXIA.v2023.2.Hs.gmt") %>% 
+  dplyr::select(gene) %>% 
+  unlist()
+
+#HIF1a
+HIF1a.summed.genes <- unique(
+  na.omit(
+    Anno.HIF1a.4.cell.lines@anno %>%
+      as.data.frame() %>%
+      dplyr::filter(str_detect(annotation, "Promoter")) %>% #switcho questo se voglio solo promotore
+      dplyr::select(SYMBOL) %>%
+      unlist()))
+
+write_lines(HIF1a.summed.genes, file = "HIF1a_4_celllines_peaks_in_promoter_GTFv44.txt")
+
+#salvo geni di HALLMARKS HYPOXIA condivisi con i picchi di HIF1a
+write_lines(hypoxia_hallmarks_genes[hypoxia_hallmarks_genes %in% HIF1a.summed.genes], "Hallmarks_hypoxia_in_HIF1a_4_celllines_peaks_GTFv44.txt")
+write_lines(hypoxia_hallmarks_genes[hypoxia_hallmarks_genes %in% HIF1a.summed.genes], "Hallmarks_hypoxia_in_HIF1a_4_celllines_peaks_GTFv44_only_promoter.txt")
+
+
+#HIF2a
+HIF2a.summed.genes <- unique(
+  na.omit(
+    Anno.HIF2a.4.cell.lines@anno %>%
+      as.data.frame() %>%
+      dplyr::filter(str_detect(annotation, "Promoter")) %>% #switcho questo se voglio solo promotore
+      dplyr::select(SYMBOL) %>%
+      unlist()))
+
+write_lines(HIF2a.summed.genes, file = "HIF2a_4_celllines_peaks_in_promoter_GTFv44.txt")
+
+#salvo geni di HALLMARKS HYPOXIA condivisi con i picchi di HIF2a
+write_lines(hypoxia_hallmarks_genes[hypoxia_hallmarks_genes %in% HIF2a.summed.genes], "Hallmarks_hypoxia_in_HIF2a_4_celllines_peaks_GTFv44.txt")
+write_lines(hypoxia_hallmarks_genes[hypoxia_hallmarks_genes %in% HIF2a.summed.genes], "Hallmarks_hypoxia_in_HIF2a_4_celllines_peaks_GTFv44_only_promoter.txt")
+```
+
+
+#rGREAT analysis (al posto del solito enrichment sui geni)
+```{r}
+library(rGREAT)
+
+HIF1a.4.cell.lines
+HIF2a.4.cell.lines
+
+#"msigdb:C5:GO:BP" "msigdb:C2:CP:KEGG" "msigdb:H"
+
+GREAT_HIF1A_4_cell_lines <- list("msigdb:C5:GO:BP" = great(HIF1a.4.cell.lines, gene_sets = "msigdb:C5:GO:BP", "TxDb.Hsapiens.UCSC.hg38.knownGene"), 
+                                "msigdb:C2:CP:KEGG" = great(HIF1a.4.cell.lines, gene_sets = "msigdb:C2:CP:KEGG", "TxDb.Hsapiens.UCSC.hg38.knownGene"),
+                                "msigdb:H" = great(HIF1a.4.cell.lines, gene_sets = "msigdb:H", "TxDb.Hsapiens.UCSC.hg38.knownGene")
+                                ) 
+
+GREAT_HIF2A_4_cell_lines <- list("msigdb:C5:GO:BP" = great(HIF2a.4.cell.lines, gene_sets = "msigdb:C5:GO:BP", "TxDb.Hsapiens.UCSC.hg38.knownGene"), 
+                                "msigdb:C2:CP:KEGG" = great(HIF2a.4.cell.lines, gene_sets = "msigdb:C2:CP:KEGG", "TxDb.Hsapiens.UCSC.hg38.knownGene"),
+                                "msigdb:H" = great(HIF2a.4.cell.lines, gene_sets = "msigdb:H", "TxDb.Hsapiens.UCSC.hg38.knownGene")
+                                ) 
+
+GREAT_HIF1A_4_cell_lines_Res <- lapply(GREAT_HIF1A_4_cell_lines, function(df) {
+  res <- getEnrichmentTable(df)
+  return(res)
+})
+
+GREAT_HIF2A_4_cell_lines_Res <- lapply(GREAT_HIF2A_4_cell_lines, function(df) {
+  res <- getEnrichmentTable(df)
+  return(res)
+})
+
+
+dotplot <- function(df, title) {
+  
+  plot <- df|> 
+  as.data.frame() |> 
+  slice_head(n = 15) |> 
+  dplyr::arrange(desc(fold_enrichment)) |> 
+  dplyr::select(id, fold_enrichment, p_adjust, observed_region_hits) |> 
+  ggplot(aes(y = reorder(id, fold_enrichment), x = fold_enrichment, fill = p_adjust, size = observed_region_hits)) +
+  scale_fill_gradient(high = "blue", low = "red", name = "padj") +
+  geom_point(colour="black", pch=21) +
+  scale_size(range = c(5,15)) +
+  labs(y = NULL,
+      x = "Fold enrichment",
+      size = "Hits",
+      title = title) +
+  guides(color = guide_colorbar(order = 1))
+
+  return(plot)
+}
+
+Plot_GREAT_HIF1A_4_cell_lines_Res <- lapply(GREAT_HIF1A_4_cell_lines_Res, function(df) 
+  plot <- dotplot(df, "HIF-1a GREAT")
+)
+
+Plot_GREAT_HIF2A_4_cell_lines_Res <- lapply(GREAT_HIF2A_4_cell_lines_Res, function(df) 
+  plot <- dotplot(df, "HIF-2a GREAT")
+)
+
+Plot_GREAT_HIF1A_4_cell_lines_Res$`msigdb:C5:GO:BP`
+Plot_GREAT_HIF1A_4_cell_lines_Res$`msigdb:H`
+
+Plot_GREAT_HIF2A_4_cell_lines_Res$`msigdb:C5:GO:BP`
+Plot_GREAT_HIF2A_4_cell_lines_Res$`msigdb:H`
+
+ggsave(Plot_GREAT_HIF1A_4_cell_lines_Res$`msigdb:H`, filename = "GREAT_HIF1a_H.pdf", width = 8, height = 8)
+ggsave(Plot_GREAT_HIF2A_4_cell_lines_Res$`msigdb:H`, filename = "GREAT_HIF2a_H.pdf", width = 8, height = 8)
+```

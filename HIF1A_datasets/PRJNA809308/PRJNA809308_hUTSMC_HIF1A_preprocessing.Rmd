@@ -1,0 +1,121 @@
+```{r setup}
+library(tidyverse)
+library(reticulate)
+```
+
+```{bash}
+#mkdir PRJNA809308/SRR
+cd PRJNA809308/SRR
+
+#while read line
+#do /home/alessio/tools/sratoolkit.3.0.7-ubuntu64/bin/prefetch-orig.3.0.7 ${line}
+#done < ../SRR_HIF1A_HutSMC.txt
+
+cd ../
+mkdir fastq
+cd fastq
+
+for sample in ../SRR/*; do /home/alessio/tools/sratoolkit.3.0.7-ubuntu64/bin/fasterq-dump-orig.3.0.7 "$sample" --split-files -e 10; pigz "${sample}_1.fastq" -p 10; pigz "${sample}_2.fastq" -p 10; done 
+```
+
+#quality control
+```{bash}
+cd PRJNA809308
+mkdir qc
+
+fastqc fastq/*.fastq -o qc -t 10
+
+
+source activate multiqc
+
+multiqc qc -o multiqc_report
+```
+
+
+#trimming
+```{bash}
+cd PRJNA809308/fastq
+for sample in *_1.fastq; do samplename=$(basename "$sample" | awk -F "_" '{print $1}'); trim_galore --paired "$samplename"_1.fastq "$samplename"_2.fastq -j 10; done 
+```
+
+#quality control after trimming
+```{bash}
+cd PRJNA809308
+
+fastqc fastq/*_val*.fq -o qc_after_trimming -t 10
+
+source activate multiqc
+
+multiqc qc_after_trimming -o multiqc_report_after_trimming
+```
+
+#allineamento
+```{r}
+library(Rsubread)
+
+setwd("/media/alessio/Data/hypoxia/HIF1A_datasets/PRJNA809308/alignment/")
+
+index.for.subread <- "/media/alessio/Data/Transcriptional_constraint_of_EWS-FLI_by_an_ETS_transcription_factor_promotes_Ewing_sarcoma_growth/ATAC_seq_data/Rsubread_index/GRCh38.primary_assembly.genome"
+
+dir = "/media/alessio/Data/hypoxia/HIF1A_datasets/PRJNA809308/fastq"
+fastas = list.files(dir, pattern = ".*val*") %>%
+  gsub("_.*", "", .) %>%
+  unique()
+
+for (i in fastas) {
+  read1 = file.path(dir,str_c(i,"_1_val_1.fq"))
+  read2 = file.path(dir,str_c(i,"_2_val_2.fq"))
+  Outbam = str_c(i,".bam")
+  align(index.for.subread, readfile1 = read1, readfile2 = read2, output_file = Outbam,
+    nthreads = 10, type = 1, unique = TRUE, minFragLength = 30 , maxFragLength = 2000)
+}
+```
+
+#sorting and indexing
+```{r}
+library(Rsamtools)
+
+dir = "/media/alessio/Data/hypoxia/HIF1A_datasets/PRJNA809308/alignment"
+bams = list.files(dir, pattern = "\\.bam$")
+
+for (i in bams) {
+  
+  #sorting
+  in.bam = file.path(dir,i)
+  sorted.bam = str_replace(in.bam, ".bam", "_sorted")
+
+  sortBam(in.bam, sorted.bam, nThreads = 10)
+
+  #indexing
+  sorted.bam = str_c(sorted.bam,".bam")
+  indexBam(sorted.bam)
+}
+```
+
+
+plotFingerprint
+```{bash}
+source activate Deeptools
+
+plotFingerprint -b PRJNA809308/alignment/SRR18097067_sorted.bam PRJNA809308/alignment/SRR18097068_sorted.bam -o PRJNA809308/plot/Fingerprint.png
+#l'input ha più library complecity del IP
+```
+
+#creo BigWig con Bamcompare
+```{bash}
+source activate Deeptools
+
+bamCoverage -b PRJNA809308/alignment/SRR18097068_sorted.bam -o PRJNA809308/Bw/SRR18097068.bw --normalizeUsing RPKM -p 10 --binSize 20
+
+bamCoverage -b PRJNA809308/alignment/SRR18097067_sorted.bam -o PRJNA809308/Bw/SRR18097067.bw --normalizeUsing RPKM -p 10 --binSize 20
+#confermo guardando con IGV che l'input ha più arricchimento dell'IP, in alcune zone no, chiamo comunque i picchi usando l'input
+```
+
+#chiamo i picchi
+```{bash}
+mkdir PRJNA809308/macs3_peaks
+
+macs3 callpeak -t PRJNA809308/alignment/SRR18097068_sorted.bam -c PRJNA809308/alignment/SRR18097067_sorted.bam -f BAMPE --outdir PRJNA809308/macs3_peaks -n SRR18097068_macs3 -g hs
+```
+
+

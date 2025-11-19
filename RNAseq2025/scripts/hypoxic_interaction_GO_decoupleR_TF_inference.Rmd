@@ -1,0 +1,354 @@
+```{r setup}
+{
+  library(tidyverse)
+  library(patchwork)
+  library(clusterProfiler)
+  library(dorothea)   # DoRothEA regulons + helper functions
+  library(viper)      # VIPER algorithm; dorothea provides a wrapper
+  library(decoupleR)
+}
+```
+
+# files and variables
+```{r}
+interactions_hypoxia_genes_folder <-  '/media/alessio/Data/hypoxia/RNAseq2025/interaction_hypoxia_repclones/'
+vst_mean_rep_file <- '/media/alessio/Data/hypoxia/RNAseq2025/tables/VSD_matrix_mean_tcnrep.csv'
+converter <- read_delim('/media/alessio/Data/genome110/ID_SYMBOL_converter.tsv')
+degs_files <- list.files('/media/alessio/Data/hypoxia/RNAseq2025/DEGs_tabs', full.names = T)
+degs_files <- degs_files[str_detect(degs_files, 'interaction|ctrl', negate = T)]
+plotpath <- '/media/alessio/Data/hypoxia/RNAseq2025/plot'
+
+order <- c(
+  "CAS9_cl.125_ctrl_0",   "CAS9_cl.26_ctrl_0", "HDAC4_KO_cl.125_0",   "HDAC4_KO_cl.26_0",
+  "CAS9_cl.125_ctrl_6",   "CAS9_cl.26_ctrl_6", "HDAC4_KO_cl.125_6",   "HDAC4_KO_cl.26_6",
+  "CAS9_cl.125_ctrl_24",   "CAS9_cl.26_ctrl_24", "HDAC4_KO_cl.125_24",   "HDAC4_KO_cl.26_24",
+  "CAS9_cl.125_ctrl_48",   "CAS9_cl.26_ctrl_48", "HDAC4_KO_cl.125_48",   "HDAC4_KO_cl.26_48"
+)
+
+```
+
+# Genes due to interaction
+### NB: remember that here up means: more effect in KO, down: more effect in Cas9
+```{r}
+{
+  genes_interaction_files <- list.files(interactions_hypoxia_genes_folder, full.names = T)
+  genes_interaction_up <- vector()
+  genes_interaction_down <- vector()
+  
+  for (i in genes_interaction_files) {
+    g <- read_lines(i)
+    if (str_detect(i, 'up')) {
+      genes_interaction_up <- c(genes_interaction_up, g)
+    } else {
+      genes_interaction_down <- c(genes_interaction_down, g)    
+    }
+    
+  }
+}
+```
+
+### gene ontology
+```{r}
+GO_enrichment_deregulated_general <- enrichGO(c(genes_interaction_up, genes_interaction_down), 
+                             ont = "ALL",
+                             keyType = "SYMBOL",
+                             OrgDb = "org.Hs.eg.db", 
+                             pvalueCutoff = 0.05)
+
+GO_enrichment_more_H4KO_effect <- enrichGO(genes_interaction_up, 
+                               ont = "ALL",
+                               keyType = "SYMBOL",
+                               OrgDb = "org.Hs.eg.db",
+                               pvalueCutoff = 0.05)
+
+GO_enrichment_more_Cas9_effect <- enrichGO(genes_interaction_down, 
+                               ont = "ALL",
+                               keyType = "SYMBOL",
+                               OrgDb = "org.Hs.eg.db",
+                               pvalueCutoff = 0.05)
+
+
+x1 <- dotplot(GO_enrichment_more_H4KO_effect, title = 'Genes deregulated more \n in HDAC4 KO')
+x2 <- dotplot(GO_enrichment_deregulated_general, title = 'Genes deregulated total', showCategory = 25)
+x3 <- dotplot(GO_enrichment_more_Cas9_effect, title = 'Genes deregulated more \n in Cas9')
+
+X <- x1 | x2 | x3
+
+genes_hypoxia_related <- GO_enrichment_more_Cas9_effect %>% 
+  as.data.frame() %>% 
+  dplyr::filter(str_detect(Description, 'hypoxia|oxygen levels')) 
+genes_hypoxia_related <- genes_hypoxia_related$geneID
+
+genes_hypoxia_related_vector <- vector()
+for (i in genes_hypoxia_related) {
+  u <- str_split(i, pattern = '/') %>% unlist()
+  print(u)
+  genes_hypoxia_related_vector <- unique(c(genes_hypoxia_related_vector, u))
+}
+
+genes_hypoxia_related_vector
+```
+
+```{r}
+ggsave(X, filename=paste0(plotpath,'/','GO_ALL_deregulated_genes.pdf'), width = 13, height = 10)
+```
+
+
+# TF ACTIVITY INFERENCE
+# collectri (similar to the decoupleR approach we used before but now we stay more focused on the genes we are interseted in)
+
+### from count matrix
+```{r}
+# From the VSD matrix
+# load vst counts
+vst <- read_delim(vst_mean_rep_file) %>% 
+  relocate(symbol) %>% 
+  dplyr::filter(!is.na(symbol) & !duplicated(symbol)) %>% 
+  column_to_rownames('symbol')
+
+vst <- vst[, order]
+
+net <- decoupleR::get_collectri(organism = 'human', 
+                                split_complexes = FALSE)
+
+# put this filter to avoid having like EPAS1 regulates itself
+net <- net %>% 
+  dplyr::filter(source != target)
+
+# run ULM
+# To infer TF enrichment scores we will run the Univariate Linear Model (ulm) method. 
+# For each sample in our dataset (mat) and each TF in our network (net), it fits a linear model that 
+# predicts the observed gene expression based solely on the TF’s TF-Gene interaction weights. 
+# Once fitted, the obtained t-value of the slope is the score. If it is positive, we interpret 
+# that the TF is active and if it is negative we interpret that it is inactive.
+
+sample_acts <- decoupleR::run_ulm(mat = vst, 
+                                  net = net, 
+                                  .source = 'source', 
+                                  .target = 'target',
+                                  .mor = 'mor', 
+                                  minsize = 5)
+
+sample_acts
+
+
+# visualization
+n_tfs <- 50
+
+# Transform to wide matrix
+sample_acts_mat <- sample_acts %>%
+  tidyr::pivot_wider(id_cols = 'condition', 
+                     names_from = 'source',
+                     values_from = 'score') %>%
+  tibble::column_to_rownames('condition') %>%
+  as.matrix()
+
+# Get top tfs with more variable means across clusters
+tfs <- sample_acts %>%
+  dplyr::group_by(source) %>%
+  dplyr::summarise(std = stats::sd(score)) %>%
+  dplyr::arrange(-abs(std)) %>%
+  head(n_tfs) %>%
+  dplyr::pull(source)
+
+
+g <- unique(sample_acts$source)
+
+hifs <- g[str_detect(g, 'HIF|EPAS')]
+mefs <- g[str_detect(g, 'MEF')]
+hdacs <- g[str_detect(g, 'HDAC')]
+
+listgenes <- list('hifs' = hifs,
+                     'mefs' = mefs, 
+                     'hdacs' = hdacs)
+
+for (geneset in names(listgenes)) {
+  sample_acts_mat_subset <- sample_acts_mat[order ,listgenes[[geneset]]]
+  
+  # Scale per sample
+  sample_acts_mat_subset <- scale(sample_acts_mat_subset)
+  
+  # Choose color palette
+  colors <- rev(RColorBrewer::brewer.pal(n = 11, name = "RdBu"))
+  colors.use <- grDevices::colorRampPalette(colors = colors)(100)
+  
+  my_breaks <- c(seq(-2, 0, length.out = ceiling(100 / 2) + 1),
+                 seq(0.05, 2, length.out = floor(100 / 2)))
+  
+  # Plot
+  pdf(paste0(plotpath,'/',geneset,'TF_activity_degs_genes.pdf'))
+  pheatmap::pheatmap(mat = sample_acts_mat_subset,
+                     cluster_rows = F,
+                     color = colors.use,
+                     border_color = "white",
+                     breaks = my_breaks,
+                     cellwidth = 15,
+                     cellheight = 15,
+                     treeheight_row = 20,
+                     treeheight_col = 20) 
+  dev.off()
+}
+```
+
+
+# From DESEq degs
+```{r}
+# From the DEGs
+# load degs tables
+n_tfs <- 50
+
+Vs_normoxia_degs <- list()
+for (file in degs_files) {
+  name = basename(file) %>%  str_remove('.tsv')
+  
+  df <- read_delim(file) %>%
+    dplyr::filter(!is.na(symbol) & !duplicated(symbol) & !is.na(stat)) %>%
+    dplyr::mutate(stat = as.numeric(stat)) %>%   # convert while still a data frame
+    column_to_rownames('symbol') %>%
+    dplyr::select(log2FoldChange, padj, stat) %>% 
+    as.matrix()
+
+  Vs_normoxia_degs[[name]] <- df
+  
+}
+
+# run ulm on degs table
+ulm_Vs_normoxia_degs <- lapply(Vs_normoxia_degs, function(x) {
+  contrast_acts <- decoupleR::run_ulm(mat = x[, 'stat', drop = FALSE], 
+                                      net = net, 
+                                      .source = 'source', 
+                                      .target = 'target',
+                                      .mor='mor', 
+                                      minsize = 5)
+  return(contrast_acts)
+}) 
+
+
+# function to make the barplot
+make_plot_ulm_withy_DEGs <- function(df, name) {
+  f_contrast_acts <- df %>%
+    dplyr::mutate(rnk = NA)
+  
+  msk <- f_contrast_acts$score > 0
+  
+  f_contrast_acts[msk, 'rnk'] <- rank(-f_contrast_acts[msk, 'score'])
+  f_contrast_acts[!msk, 'rnk'] <- rank(-abs(f_contrast_acts[!msk, 'score']))
+  
+  tfs <- f_contrast_acts %>%
+    dplyr::arrange(rnk) %>%
+    head(n_tfs) %>%
+    dplyr::pull(source)
+  
+  f_contrast_acts <- f_contrast_acts %>%
+    dplyr::filter(source %in% tfs)
+  
+  colors <- rev(RColorBrewer::brewer.pal(n = 11, name = "RdBu")[c(2, 10)])
+  
+  p <- ggplot(data = f_contrast_acts, 
+                       mapping = aes(x = stats::reorder(source, score), 
+                                              y = score)) + 
+    geom_bar(mapping = aes(fill = score),
+                      color = "black",
+                      stat = "identity") +
+    scale_fill_gradient2(low = colors[1], 
+                                  mid = "whitesmoke", 
+                                  high = colors[2], 
+                                  midpoint = 0) + 
+   theme_minimal() +
+    theme(axis.title = element_text(face = "bold", size = 12),
+                   axis.text.x = element_text(angle = 45, 
+                                                       hjust = 1, 
+                                                       size = 10, 
+                                                       face = "bold"),
+                   axis.text.y = element_text(size = 10, 
+                                                       face = "bold"),
+                   panel.grid.major = element_blank(), 
+                   panel.grid.minor = element_blank()) +
+    labs(x = 'TFs',
+         title = name)
+  
+  print(p)  
+}
+
+for (name in names(ulm_Vs_normoxia_degs)) {
+  make_plot_ulm_withy_DEGs(ulm_Vs_normoxia_degs[[name]], name)
+}
+```
+```{r}
+tf <- 'HIF1A'
+
+make_volcano_genes_regulating_TF <- function(data, title) {
+  
+  df <- net %>%
+    dplyr::filter(source == tf) %>%
+    dplyr::arrange(target) %>%
+    dplyr::mutate(ID = target, color = "3") %>%
+    tibble::column_to_rownames('target')
+  
+  inter <- sort(dplyr::intersect(rownames(data), rownames(df)))
+  
+  df <- df[inter, ]
+  
+  df[,c('logfc', 'padj', 'stat')] <- data[inter, ]
+  
+  df <- df %>%
+    dplyr::mutate(color = dplyr::if_else(mor > 0 & stat > 0, '1', color)) %>%
+    dplyr::mutate(color = dplyr::if_else(mor > 0 & stat < 0, '2', color)) %>%
+    dplyr::mutate(color = dplyr::if_else(mor < 0 & stat > 0, '2', color)) %>%
+    dplyr::mutate(color = dplyr::if_else(mor < 0 & stat < 0, '1', color))
+  
+  colors <- rev(RColorBrewer::brewer.pal(n = 11, name = "RdBu")[c(2, 10)])
+  
+  p <- ggplot(data = df, 
+              mapping = aes(x = logfc, 
+                            y = -log10(padj), 
+                            color = color,
+                            size = abs(mor))) + 
+    geom_point(size = 2.5, 
+               color = "black") + 
+    geom_point(size = 1.5) +
+    scale_colour_manual(values = c(colors[2], colors[1], "grey")) +
+    ggrepel::geom_label_repel(mapping = aes(label = ID,
+                                            size = 1)) + 
+    theme_minimal() +
+    theme(legend.position = "none") +
+    geom_vline(xintercept = 0, linetype = 'dotted') +
+    geom_hline(yintercept = 0, linetype = 'dotted') +
+    labs(title = tf,
+         subtitle = name)
+  
+  print(p)
+}
+
+for (name in names(Vs_normoxia_degs)) {
+  make_volcano_genes_regulating_TF(Vs_normoxia_degs[[name]], name)
+}
+# Here blue means that the sign of multiplying the mor and t-value is negative,
+# meaning that these genes are “deactivating” the TF, and red means that 
+# the sign is positive, meaning that these genes are “activating” the TF.
+```
+
+# check the TF activity of the hypoxia-HDAC4 KO interaction genes
+# WE do the ulm analysis
+```{r}
+interaction_term_degs <- read_delim('../DEGs_tabs/H4KO_vs_ctrl_48h_interaction.tsv') %>% 
+      dplyr::filter(!is.na(symbol) & !duplicated(symbol) & !is.na(stat)) %>%
+    dplyr::mutate(stat = as.numeric(stat)) %>% # convert while still a data frame
+    column_to_rownames('symbol') %>%
+    dplyr::select(log2FoldChange, padj, stat) %>% 
+    as.matrix()
+
+interaction_term_contrast_acts <- decoupleR::run_viper(mat = interaction_term_degs[, 'stat', drop = FALSE], 
+                                      net = net, 
+                                      .source = 'source', 
+                                      .target = 'target',
+                                      .mor='mor', 
+                                      minsize = 5)
+n_tfs <- 50
+
+pdf(paste0(plotpath,'/Degs_viper_TF_activity_inference_top_',n_tfs,'.pdf'), height = 6, width = 10)
+make_plot_ulm_withy_DEGs(interaction_term_contrast_acts, '')
+dev.off()
+```
+
+

@@ -1,0 +1,74 @@
+```{r setup, echo = F}
+library(tidyverse)
+library(ChIPseeker)
+```
+
+#intanto faccio il liftover su hg38
+```{bash}
+for i in bed/*.bed ; do samplename=$(basename "$i" | awk -F ".bed" '{print $1}'); /home/alessio/tools/liftOver "$i" /media/alessio/Data/genome110/hg19ToHg38.over.chain bed/"$samplename"_liftedtohg38.bed unmapped; rm unmapped; done
+```
+
+
+#devo tenere solo i file che mi intersessano, analizzo SraRuntable
+```{r}
+SraRunTable <- read_csv("SraRunTable.txt")
+
+#intanto filtro per HIF1a e hypoxia 16 ore
+HIf1a_sampels <- SraRunTable %>% 
+  dplyr::filter(str_detect(chip_antibody, "HIF1a"))
+
+#creo un vettore con i sample name che mi servono per filtrare i file
+Sample_names <- HIf1a_sampels %>% 
+  dplyr::filter(str_detect(cell_line, "WT|Hep")) %>% 
+  pull(`Sample Name`)
+```
+
+#carico i bed
+```{r}
+all.files <- list.files(path = "bed_lifted", full.names = T)
+
+#tengo solo quelli che mi servono
+files.Oi <- all.files[str_extract(all.files, "(?<=/)[^_]+") %in% Sample_names]
+
+Peaks.HIF1a <- list()
+
+for (i in files.Oi) {
+  name <- basename(i)
+  tmp.df <- readPeakFile(i)
+  Peaks.HIF1a[[name]] <- tmp.df
+}
+
+summary(Peaks.HIF1a)
+```
+
+```{r}
+library(ChIPpeakAnno)
+
+makeVennDiagram(Peaks = list(Peaks.HIF1a[[1]], Peaks.HIF1a[[2]], Peaks.HIF1a[[3]], Peaks.HIF1a[[4]]),
+                NameOfPeaks = c(names(Peaks.HIF1a[1]), names(Peaks.HIF1a[2]), names(Peaks.HIF1a[3]), names(Peaks.HIF1a[4])))
+```
+# save consensus replicates peaks
+```{r}
+Consensus_HIF1a <- list()
+
+for (i in 1:(length(Peaks.HIF1a)/2)) {
+  
+  name = str_split(names(Peaks.HIF1a)[[i*2]], pattern = '_JS') %>%  unlist()
+  name = name[[1]]
+  name2 = str_split_i(name, pattern = '_', 2) 
+  
+  peak1 <- Peaks.HIF1a[[i*2]]
+  peak2 <- Peaks.HIF1a[[(i*2)-1]]
+  
+  Consensus <- subsetByOverlaps(peak1, peak2) %>% 
+    as.data.frame()
+  
+  Consensus_HIF1a[[name2]] <- Consensus
+  
+  write_delim(Consensus, file = str_c("/media/alessio/Data/hypoxia/HIF1A_datasets/PRJNA494833/Consensus_bed/",name2,"_HIF1a_consensus.bed"), 
+              delim = '\t',
+              col_names = F)
+}
+
+```
+

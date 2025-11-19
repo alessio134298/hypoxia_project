@@ -1,0 +1,192 @@
+```{r setup, echo = F}
+library(tidyverse)
+library(GenomicRanges)
+library(ChIPseeker)
+```
+
+#carico il dataframe
+```{r}
+chromosomes <- str_c("chr", c(1:22, "X", "Y", "M"))
+
+HIF1A.bed <- read_table("Oth.ALL.05.HIF1A.AllCell.bed", skip = 1, col_names = F) %>% 
+  dplyr::rename(Info = X4) %>% 
+  dplyr::filter(X1 %in% chromosomes)
+  # dplyr::mutate(q.value = 10^-(X5/10))
+
+Counts <- HIF1A.bed %>% 
+  group_by(Info) %>% 
+  summarise(N.peaks = n()) %>% 
+  arrange(desc(N.peaks))
+
+# Outliers <- Counts[order(Counts$N.peaks, decreasing = T)[0],] %>% dplyr::select(Info) %>% unlist()
+# 
+# HIF1A.bed <- HIF1A.bed %>% 
+#   dplyr::filter(!Info %in% Outliers)
+```
+
+#estraggo i nomi delle linee cellulari
+```{r}
+HIF1A.bed.def <- HIF1A.bed %>% 
+  dplyr::mutate(name = str_extract(Info, ";<br>source_name([^;]+);"),
+                cell_line = str_extract(Info, ";cell%20line([^;]+);")
+                # cell_type = str_extract(Info, ";cell%20type([^;]+);"),
+                # tissue = str_extract(Info, ";tissue([^;]+);")
+                # antibody = str_extract(Info, ";antibody([^;]+);"),
+                # genotype = str_extract(Info, ";genotype([^;]+);"),
+                # treatment = str_extract(Info, ";(treatment|treated%20with|protocol|condition|stress)([^;]+);"),
+                # duration_of_hyp = str_extract(Info, ";(duration%20of%20hypoxia|treatment%20length)([^;]+);"),
+  ) %>% 
+  dplyr::mutate(cell_line = str_remove(cell_line, ";cell%20line=") %>% #non è molto bello da vedere ma devo in qualche modo sistemare i nomi delle cell line
+                  str_remove(., "%20cell|%20line;|;|\\(2\\)%20line") %>% 
+                  str_replace(., "SK-N-BE\\(2\\)%20line;", "SK-N-BE") %>% 
+                  str_remove(., "s;")) %>% #il risultato non è male
+  dplyr::filter(!is.na(cell_line)) #rimuovo i campioni che non hanno una descrizione sulla cell line
+
+Cell_lines <- HIF1A.bed.def %>% 
+  dplyr::select(cell_line) %>% 
+  distinct() %>% 
+  as.vector()#abbiamo 26 cell_line
+```
+
+#creo lista raggruppando le cell lines
+```{r}
+cell_line_groups <- list(
+  Lung = c("A549", "H460", "H1299", "BEAS-2B"),
+  Kidney = c("786-O", "RCC4", "HK-2", "HK2", "HKC8_WT", "HKC8_HIF2aKO", "HKC8"),
+  Breast = c("MDA-MB-231", "MDA-MB-157", "T47D"),
+  Cervix = c("HeLa"),
+  Colon = c("HCT116", "RKO"),
+  Liver = c("HepG2"),
+  Prostate = c("PC3"),
+  Endothelial = c("EA.Hy926", "HUVEC"),
+  Pancreas = c("Panc1"),
+  Melanoma = c("501mel"),
+  Head_and_Neck = c("FADU"),
+  Nervous_System = c("SK-N-BE"),
+  Embryonic_Kidney_Misc = c("HEK293T")
+)
+
+cell_line_groups_enframed <- cell_line_groups %>% 
+  enframe(name = "Tissue", value = "cell_line") %>% 
+  unnest("cell_line")
+```
+
+
+#Nest dei dataframe separati in base alla cell line
+```{r}
+#trasformo tutti i picchi di HIF1a in Granges e riduco
+HIF1A.Granges <- makeGRangesFromDataFrame(HIF1A.bed.def, seqnames.field = "X1", start.field = "X2", end.field = "X3") %>% 
+  IRanges::reduce()
+
+#in questo modo ricreo lo scaffold per la matrice usando il granges totale ridotto
+HIF1A.reduced.df <- as.data.frame(HIF1A.Granges)
+
+#faccio nesting sugli id, poi creo un vettore boolean per avere Y o N dell'overlap (totale su campione)
+HIF1A.nested <- HIF1A.bed.def %>% 
+  nest_by(cell_line) %>%
+  dplyr::mutate(total = list(HIF1A.reduced.df)) %>% 
+  dplyr::mutate(Granges = list(makeGRangesFromDataFrame(data,  keep.extra.columns=T, seqnames.field = "X1", start.field = "X2", end.field = "X3"))) %>% 
+  dplyr::mutate(Overlaps_on_total = list(HIF1A.Granges %over% Granges))
+
+#creo la matrice
+HIF1A.matrix <- HIF1A.nested %>% 
+  dplyr::select(total, cell_line, Overlaps_on_total) %>% 
+  unnest(c(Overlaps_on_total, total)) %>% 
+  pivot_wider(names_from = cell_line, values_from = Overlaps_on_total) %>% 
+  dplyr::select(-c(width, strand))
+
+#sistemo la matrice
+HIF1A.matrix <- HIF1A.matrix %>% 
+  dplyr::mutate(locus = str_c(seqnames,start,end,sep = "_")) %>% 
+  dplyr::select(-c(seqnames,start,end)) %>% 
+  column_to_rownames("locus")
+```
+
+#salvo la matrice
+```{r}
+write_delim(HIF1A.matrix %>% rownames_to_column(var = "locus"), file = "HIF1A_Matrix.tsv", col_names = T, delim = "\t")
+```
+
+
+########################
+#Clustering dei campioni
+########################
+
+#carico matrice
+```{r, echo = F, message=F}
+HIF1A.matrix <- read_tsv("HIF1A_Matrix.tsv") %>% 
+  column_to_rownames(var = "locus")
+```
+
+```{r}
+#traspongo a matrice e calcolo distanze
+t.HIF1A.matrix <- t(as.matrix(HIF1A.matrix))
+distances <- dist(t.HIF1A.matrix, method = "euclidean")
+```
+
+#hierarchical clustering
+```{r}
+hc = hclust(distances, method = "ward.D")
+
+#cambio le labels con i nomi dei tessuti
+labels <- hc$labels %>%
+  as.data.frame() %>% 
+  left_join(cell_line_groups_enframed, join_by("." == "cell_line")) %>% 
+  dplyr::select(Tissue) %>% unlist() %>% as.vector()
+
+hc$labels <- str_c(labels,".",1:length(labels))
+
+plot(hc)
+#rect.hclust(hc, h = 150, border = "red")
+```
+
+#PCA
+```{r}
+subMat <- HIF1A.matrix[colnames(HIF1A.matrix) %in% c(cell_line_groups$Lung, cell_line_groups$Kidney)] #è una prova
+
+pca = prcomp(subMat, scale = T)
+
+pca_1_2 <- pca$rotation[,1:2] %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "cell_line") %>% 
+  left_join(cell_line_groups_enframed, by = "cell_line")
+
+PCAplot <- ggplot(pca_1_2, aes(x = PC1, y = PC2, colour = Tissue), ) +
+  geom_point(size = 4) +
+  theme_bw()
+
+PCAplot
+```
+
+#Subsetto la matrice tenendo i locus in cui almeno due terzi dei campioni presentano un picco
+```{r}
+HIF1A.matrix.Subsetted <- HIF1A.matrix %>% 
+  dplyr::filter(rowSums(across(everything())) > 3)
+```
+
+#provo ad annotare queste regioni per vedere come sono
+```{r}
+library(clusterProfiler)
+HIF1A.binding.regions <- HIF1A.matrix.Subsetted %>% 
+  rownames_to_column(var = "locus") %>% 
+  separate_wider_delim(cols = "locus", delim = "_", names = c("seqnames", "start", "end")) %>% 
+  makeGRangesFromDataFrame(.)
+
+txdb = TxDb.Hsapiens.UCSC.hg38.knownGene::TxDb.Hsapiens.UCSC.hg38.knownGene
+
+HIF1A.binding.regions.Anno <- annotatePeak(HIF1A.binding.regions, TxDb = txdb, level = "gene", annoDb = "org.Hs.eg.db")
+plotAnnoBar(HIF1A.binding.regions.Anno)
+
+df <- HIF1A.binding.regions.Anno@anno %>% as.data.frame() %>% 
+  dplyr::filter(str_detect(annotation, "Promoter"))
+Go <-  enrichGO(gene = df$geneId, OrgDb = "org.Hs.eg.db", keyType = "ENTREZID", ont = "BP")
+dotplot(Go, showCategory = 30)
+
+#non da hypoxia
+```
+
+#salvo file contenente binding site di HIF1a consensus
+```{r}
+write_delim(as.data.frame(HIF1A.binding.regions), file = "ChIP_atlas_HIF1a_all_cells_at_least_3_cell_lines_with_peak.bed", delim = "\t", col_names = F)
+```
+

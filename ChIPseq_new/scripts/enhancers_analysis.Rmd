@@ -308,7 +308,7 @@ H4KO_data_active_long_anno_HDAC4_peaks_info$overlaps_HDAC4 <-
 
 H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info <- H4KO_data_poised_to_active_long
 H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info$overlaps_HDAC4 <- 'no'
-H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info$overlaps_HDAC4[overlaps_with_HDAC4] <- 'yes'
+H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info$overlaps_HDAC4[overlaps_with_HDAC4_poised_to_active] <- 'yes'
 H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info$overlaps_HDAC4 <- 
   factor(H4KO_data_poised_to_active_long_anno_HDAC4_peaks_info$overlaps_HDAC4,
          levels = c("no", "yes"))
@@ -332,6 +332,7 @@ H4KO_data_active_and_poised_to_active_long_anno_HDAC4_peaks_info_plot <- H4KO_da
   facet_wrap(~ mark + names,
              scales = "free_x",
              nrow = 1) +
+  stat_compare_means(method = 'kruskal.test') +
   theme_bw() +
   theme(
     axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)
@@ -370,7 +371,7 @@ MEF2D_bw <- import.bw('../../../NAR2020_Cb/SK3_trimmed-25_markdup_RPKM.bw')
 filex <- list.files('../poised_active_class/', full.names = T)
 filex <- filex[str_detect(filex, 'HDAC4|H3K27ac', negate = T)]
 
-# load peak file and countthe number of overlaps with HDAC4
+# load peak file and count the number of overlaps with HDAC4
 # and calculate HDAC4 bigwig signal
 enhancers <- list()
 HDAC4_over_enhancers_quantification <- list()
@@ -420,12 +421,15 @@ stat_data <- HDAC4_over_enhancers_quantification_long %>%
 HDAC4_over_enhancers_boxplot <- HDAC4_over_enhancers_quantification_long %>% 
   ggplot(aes(x = name, y = log2(Score), fill = type)) +
   geom_boxplot() +
-  stat_compare_means(method = 'wilcox.test', data = stat_data,
-                     comparisons = list(c('H4KO_poised_to_active', 'H4KO_active_to_poised'))) +
+  stat_compare_means(method = 'wilcox.test',
+                                       comparisons = list(c('H4KO_poised_to_active', 'H4KO_active_to_poised'),
+                                        c('Cas9_active_enh_norm', 'Cas9_poised_enh_norm'),
+                                        c('H4KO_active_enh_norm', 'H4KO_poised_enh_norm')
+                                        )) +
   theme_bw() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
         strip.text = element_blank()) +
-  facet_wrap(~ shift, scales = 'free_x', space = 'free_x') +
+  # facet_wrap(~ shift, scales = 'free_x', space = 'free_x') +
   labs(x = NULL,
         y = 'log2(RPKM)',
        title = 'HDAC4 RPKM over enhancers')
@@ -450,12 +454,16 @@ stat_data %>%
 MEF2D_over_enhancers_boxplot <- MEF2D_over_enhancers_quantification_long %>% 
   ggplot(aes(x = name, y = log2(Score), fill = type)) +
   geom_boxplot() +
-  stat_compare_means(method = 'wilcox.test', data = stat_data,
-                     comparisons = list(c('H4KO_poised_to_active', 'H4KO_active_to_poised'))) +
+  stat_compare_means(method = 'wilcox.test',
+                     comparisons = list(c('H4KO_poised_to_active', 'H4KO_active_to_poised'),
+                                        c('Cas9_active_enh_norm', 'Cas9_poised_enh_norm'),
+                                        c('H4KO_active_enh_norm', 'H4KO_poised_enh_norm')
+                                        )
+                     ) +
   theme_bw() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
         strip.text = element_blank()) +
-  facet_wrap(~ shift, scales = 'free_x', space = 'free_x') +
+  # facet_wrap(~ shift, scales = 'free_x', space = 'free_x') +
   labs(x = NULL,
         y = 'log2(RPKM)',
        title = 'MEF2D RPKM over enhancers')

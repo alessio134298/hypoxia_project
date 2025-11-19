@@ -9,6 +9,7 @@
 }
 
 interactions_hypoxia_genes_folder <-  'interaction_hypoxia_repclones/'
+lrt_test_genes <- 'interaction_hypoxia_LRT_test/genes_LRT_test.txt'
 
 # Load the genesets
 ##########################################
@@ -35,7 +36,7 @@ interactions_hypoxia_genes_folder <-  'interaction_hypoxia_repclones/'
 }
 
 
-# Genes due to interaction
+# Genes due to interaction Wald and Lrt
 {
   genes_interaction_files <- list.files(interactions_hypoxia_genes_folder, full.names = T)
   genes_interaction <- vector()
@@ -45,6 +46,9 @@ interactions_hypoxia_genes_folder <-  'interaction_hypoxia_repclones/'
     genes_interaction <- c(genes_interaction, g)
   }
   genes_interaction <-unique(genes_interaction)
+
+  
+  genes_lrt <- read_lines(lrt_test_genes)
 }
 
 # add gmts file downloaded to create a list
@@ -52,7 +56,8 @@ genesets <- list(
   H_hpx_gmt = read.gmt('/home/alessio/Downloads/HALLMARK_HYPOXIA.v2025.1.Hs.gmt')$gene,
   Buffa_hpx_gmt = read.gmt('/home/alessio/Downloads/BUFFA_HYPOXIA_METAGENE.v2025.1.Hs.gmt')$gene,
   genes_hypoxia_related = genes_hypoxia_related,
-  genes_interaction = genes_interaction
+  genes_interaction = genes_interaction,
+  genes_lrt = genes_lrt
 )
 #####################################################################
 path_hmap <- 'plot/heatmaps'
@@ -102,18 +107,7 @@ mat_L2FC <- Vs_normoxia %>%
 
 mat_L2FC <- mat_L2FC[, order]
 
-# Padj
-mat_padj <- Vs_normoxia %>% 
-  dplyr::select(files, symbol, padj) %>% 
-  pivot_wider(names_from = files, values_from = padj) %>% 
-  column_to_rownames('symbol') %>%
-  as.matrix()
-
-nas <- is.na(mat_padj)
-
-mat_padj <- mat_padj[, order]
-
-mat_L2FC[nas] <- NaN
+write_csv(mat_L2FC %>% as.data.frame() %>% rownames_to_column('symbol'), file = 'tables/L2FC_vs_normoxia.csv')
 
 for (name in names(genesets)) {
   # read genelist
@@ -133,12 +127,13 @@ for (name in names(genesets)) {
     colors = c("blue", "white", "red") 
   )
   
-  png(filename = paste0(path_hmap,'/',basename(name),'_vs_normoxia_L2FC.png'), res = 300, height = 15, width = 15, units = 'cm')
+  # png(filename = paste0(path_hmap,'/',basename(name),'_vs_normoxia_L2FC.png'), res = 300, height = 15, width = 15, units = 'cm')
+  pdf(paste0(path_hmap,'/',basename(name),'_vs_normoxia_L2FC.pdf'), height = 8, width = 8)
   draw(
     Heatmap(mat_L2FC_select,
             name = "L2FC hypoxia vs\nnormoxia ctrl",
             col = col_fun,
-            row_names_gp = gpar(fontsize = 10/ (nrow(mat_L2FC_select) / 20)),
+            row_names_gp = gpar(fontsize = 20/ (nrow(mat_L2FC_select) / 20)),
             column_names_gp = gpar(fontsize = 10),
             cluster_rows = T,
             cluster_columns = F,
@@ -147,11 +142,11 @@ for (name in names(genesets)) {
                                     rep("Cas9_26", 3),
                                     rep("H4KO_125", 3),
                                     rep("H4KO_26", 3)
-                                    )),
+            )),
             row_title = name
     )
   )
- dev.off()
+  dev.off()
 }
 
 

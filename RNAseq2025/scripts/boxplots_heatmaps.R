@@ -41,8 +41,8 @@ make_boxplot <- function(df, gene, name_value) {
 
 ###################################################
 exp_file <- 'sheets/samplesheet_salmon.csv'
-tpm_file <- 'tables/TPM.csv'
-vsd_file <- 'tables/VSD.csv'
+tpm_file <- 'tables/TPM_all.csv'
+vsd_file <- 'tables/VSD_all.csv'
 id_converter <- read_delim('/media/alessio/Data/genome110/ID_SYMBOL_converter.tsv')
 interactions_hypoxia_genes_folder <-  'interaction_hypoxia_repclones/'
 
@@ -90,9 +90,10 @@ VSD_long <- make_longer(vsd_file, id_converter, exp, 'VSD')
 
 
 # Boxplot of some genes
-genes <- c('HIF1A', 'EPAS1', 'VEGFA', 'NEGR1')
-genes <- c('CKB')
+genes <- c('HIF1A', 'EPAS1', 'VEGFA', 'NEGR1', 'HIF3A', 'MEF2C', 'MEF2D') # seems de regulated due to hypoxia from decoupler and previous analysis
+genes <- c('MEF2A', 'MEF2C', 'RUNX2', 'SRF', 'ATF4', 'RANKL', 'GATA3') # supposed from literature to interact with HDAC4
 genes <- c("MGARP",  "TIGAR" , "VEGFA",  "ATF4",   "HILPDA", "ATP7A" , "FOS"  ,  "KCNK3"  ,"BNIP3"  ,"ERO1A" , "SLC7A5" ,"CXCR4" ,"LIF")
+genes <- c('VEGFA', 'VEGFB', 'VEGFC', 'VEGFD')
 for (gene in genes) {
   tpm_plot <- make_boxplot(TPM_long, gene, TPM) + theme(legend.position = 'none')
   vsd_plot <- make_boxplot(VSD_long, gene, VSD) 
@@ -112,6 +113,14 @@ mat <- VSD_long %>%
   pivot_wider(names_from = clone_group_time, values_from = VSD_mean) %>% 
   column_to_rownames('symbol') %>% 
   as.matrix()
+
+mat <- na.omit(mat)
+mat <- mat[, order]
+
+write_csv(mat %>% 
+            as.data.frame() %>% 
+            rownames_to_column('symbol'),
+          file = 'tables/VSD_matrix_mean_tcnrep.csv')
 
 # gene wise Zscore
 zscore_mat <- t(scale(t(mat)))
